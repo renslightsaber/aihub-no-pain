@@ -1,764 +1,687 @@
-# aihub-repair 상세 사용 가이드
+# 📖 USAGE 가이드
 
-> AI Hub 데이터셋 다운로드 검증·복구 스크립트의 완전한 사용 가이드.
-> 빠른 시작은 [README.md](./README.md)를, 깊은 내용은 이 문서를 참고하세요.
-
----
-
-## 📋 목차
-
-1. [배경 — `aihubshell`의 한계와 이 도구가 필요한 이유](#1-배경)
-2. [전체 워크플로우](#2-전체-워크플로우)
-3. [사전 준비](#3-사전-준비)
-4. [`check_aihub.sh` 상세](#4-check_aihubsh-상세)
-5. [`verify_zips.sh` 상세](#5-verify_zipssh-상세)
-6. [`repair_aihub.sh` 상세](#6-repair_aihubsh-상세)
-7. [환경변수 완전 레퍼런스](#7-환경변수-완전-레퍼런스)
-8. [실전 시나리오](#8-실전-시나리오)
-9. [트러블슈팅](#9-트러블슈팅)
-10. [FAQ](#10-faq)
+이 문서는 **처음 사용하는 사람이 단계별로 따라 할 수 있도록** 작성되었습니다.
+각 단계마다 **실행할 명령**, **기대 출력**, **트러블슈팅**을 포함합니다.
 
 ---
 
-## 1. 배경
+## 📑 목차
 
-### 🔬 `aihubshell`의 동작 방식과 한계
+- [0. 사전 준비](#0-사전-준비)
+- [1. AI Hub 다운로드](#1-ai-hub-다운로드)
+- [2. 다운로드 검증 (`verify/`)](#2-다운로드-검증)
+  - [2-1. 빠른 진단 — `check_aihub.sh`](#2-1-빠른-진단--check_aihubsh)
+  - [2-2. zip 무결성 검증 — `verify_zips.sh`](#2-2-zip-무결성-검증--verify_zipssh)
+  - [2-3. 자동 복구 — `repair_aihub.sh`](#2-3-자동-복구--repair_aihubsh)
+- [3. 압축 해제 (`preprocess/`)](#3-압축-해제)
+  - [3-1. zip 정리 — `move_zips_to_zips_dir.sh`](#3-1-zip-정리--move_zips_to_zips_dirsh)
+  - [3-2. 압축 해제 — `extract_zips.sh`](#3-2-압축-해제--extract_zipssh)
+- [4. 메타데이터 생성 (`build_metadata.py`)](#4-메타데이터-생성)
+- [5. 데이터 탐색 (`explore_dataset.ipynb`)](#5-데이터-탐색)
+- [6. CSV 컬럼 레퍼런스](#6-csv-컬럼-레퍼런스)
+- [7. 트러블슈팅 FAQ](#7-트러블슈팅-faq)
 
-AI Hub의 `aihubshell -mode d`는 대용량 데이터셋을 다운로드할 때 다음 단계를 거칩니다:
+---
+
+## 0. 사전 준비
+
+### 0-1. 필수 환경
+
+| 항목 | 요구사항 |
+|---|---|
+| **OS** | Linux (Ubuntu 20.04+), macOS, 또는 WSL2 |
+| **bash** | 4.0 이상 |
+| **Python** | 3.8 이상 |
+| **필수 명령어** | `unzip`, `find`, `xargs`, `awk`, `sed` |
+| **Python 패키지** | `pandas`, `jupyter`, `ipywidgets` |
+| **디스크** | 최소 3.5TB 여유 (zip 1.5TB + 해제 1.7TB + 작업 여유) |
+| **메모리** | 8GB 이상 (메타데이터 생성 시 4GB 정도 사용) |
+
+### 0-2. 디스크 공간 미리 확인
+
+```bash
+# 사용 가능 공간 (GB)
+df -BG /path/to/storage
+
+# inode 여유 (작은 파일 56만 개 생성 예정)
+df -i /path/to/storage
+```
+
+inode 사용률이 90%를 넘으면 압축 해제 중 `No space left on device` 에러가 날 수 있어요. 자세한 설명은 [FAQ #1](#faq-1-inode란-무엇인가요)을 참고하세요.
+
+### 0-3. AI Hub 가입 및 권한
+
+1. [AI Hub](https://www.aihub.or.kr) 회원가입
+2. "감성 및 발화스타일 동시 고려 음성합성 데이터" 검색 (또는 datasetkey=71349)
+3. 다운로드 신청 → 승인 대기 (보통 1~3일)
+4. 승인 완료 후 진행 가능
+
+### 0-4. 레포 클론 및 권한 설정
+
+```bash
+git clone https://github.com/renslightsaber/aihub-no-pain-71349.git
+cd aihub-no-pain-71349
+
+# 셸 스크립트 실행 권한
+chmod +x verify/*.sh preprocess/*.sh
+```
+
+---
+
+## 1. AI Hub 다운로드
+
+### 1-1. aihubshell 설치
+
+AI Hub 공식 안내에 따라 `aihubshell`을 설치합니다. 이 레포는 `aihubshell version 25.09.19 v0.6` 이상에서 검증되었어요.
+
+### 1-2. 다운로드 실행
+
+데이터셋을 받을 작업 디렉토리를 정해 그곳에서 실행합니다:
+
+```bash
+# 예: /data/aihub_71349 디렉토리에 다운로드
+mkdir -p /data/aihub_71349
+cd /data/aihub_71349
+
+aihubshell -mode d \
+  -datasetkey 71349 \
+  -aihubid <your_id> \
+  -aihubpw <your_pw>
+```
+
+### 1-3. 다운로드 완료 시 디렉토리 구조
+
+다운로드가 끝나면 다음과 같은 폴더가 생깁니다:
 
 ```
-1. 서버에서 download.tar로 한 덩어리 받기
-2. tar를 풀면 *.zip.part0, *.zip.part1073741824, ... 가 나옴
-3. 같은 prefix끼리 cat으로 병합 → *.zip 생성
-4. 중간 산출물(*.part*, download.tar) 정리
+/data/aihub_71349/
+└── 133.감성 및 발화 스타일 동시 고려 음성합성 데이터/
+    └── 01-1.정식개방데이터/
+        ├── Training/
+        │   ├── 01.원천데이터/        ← TS_xxx.zip (wav 들어있음)
+        │   └── 02.라벨링데이터/      ← TL_xxx.zip (JSON 들어있음)
+        └── Validation/
+            ├── 01.원천데이터/        ← VS_xxx.zip
+            └── 02.라벨링데이터/      ← VL_xxx.zip
 ```
 
-이 과정에서 자주 발생하는 문제:
+### ⚠️ 다운로드 중단 시
 
-| 문제 | 원인 | 결과 |
+`Ctrl+C`로 끊었거나 네트워크 오류로 중단되면:
+- `download.tar` 잔여물이 남음
+- 일부 zip 파일이 `.part` 형태로 남음
+- 또는 zip 일부만 받힘 (깨진 상태)
+
+당황하지 말고 **다음 단계 (`verify/`)** 로 넘어가세요. 자동으로 진단·복구됩니다.
+
+---
+
+## 2. 다운로드 검증
+
+다운로드가 1,412개 zip을 모두 받았는지, 깨진 파일은 없는지 검증하는 단계입니다.
+
+> 💡 **세 스크립트는 항상 같은 순서로 실행하세요**:
+> `check_aihub.sh` → `verify_zips.sh` (선택) → `repair_aihub.sh`
+
+### 2-1. 빠른 진단 — `check_aihub.sh`
+
+filelist와 실제 다운로드를 비교해 **누락 파일·잔여물**을 식별합니다. 수 분 내 완료.
+
+```bash
+# 다운로드한 디렉토리에서 실행
+cd /data/aihub_71349/
+
+# filelist 위치 명시 (레포의 verify/filelist_71349.txt 사용)
+FILELIST=~/aihub-no-pain-71349/verify/filelist_71349.txt \
+  bash ~/aihub-no-pain-71349/verify/check_aihub.sh
+```
+
+### 환경변수
+
+| 변수 | 기본값 | 설명 |
 |---|---|---|
-| **byte-level resume 미지원** | aihubshell이 이어받기 옵션 없음 | 네트워크 1초만 끊겨도 그 부분부터 끝까지 잘림 |
-| **디스크 부족** | 다운로드 + 병합 시 일시적으로 2배 공간 필요 | tar 풀다가 또는 병합 단계에서 실패 |
-| **`Ctrl+C` 무시** | Java 기반 자식 프로세스가 시그널 핸들링 | 강제 종료 후 잔재만 남고 상태 불명 |
-| **자동 정리 실패** | 위 문제들로 part·tar 잔재가 남음 | 어떤 파일이 정상인지 수동 확인 어려움 |
-| **filelist 파싱 오류** | aihubshell -mode l 출력에 트리 문자(`│`, `├`, `─`) 포함 | 단순 파싱 시 파일명 앞에 트리 문자가 붙어 매칭 실패 |
+| `FILELIST` | `./filelist_71349.txt` | AI Hub filelist 파일 경로 |
+| `BASE_DIR` | `.` | 검사할 다운로드 루트 |
+| `DEBUG` | `0` | 1이면 상세 매칭 로그 출력 |
 
-`aihub-repair`는 이 5가지 문제를 자동으로 진단·복구합니다.
+### 기대 출력
 
-### 📦 다섯 가지 파일 상태
+```
+============================================
+  AI Hub 데이터셋 다운로드 진단
+============================================
+filelist 기준 파일 수    : 1412
+실제 디스크 파일 수      : 1410
+누락된 파일             : 2
+download.tar 잔여물    : 1개 발견
+.part 잔여물          : 0개
 
-`repair_aihub.sh`는 모든 화자 파일을 다음 5가지 상태로 분류합니다:
+--- 누락 파일 목록 ---
+  - TS_애니체_098.zip
+  - VL_친절체_021.zip
 
-| 상태 | 의미 | 조치 |
+다음 단계: bash repair_aihub.sh
+```
+
+### 2-2. zip 무결성 검증 — `verify_zips.sh`
+
+모든 zip의 CRC 체크섬을 병렬로 검증합니다. 시간이 걸리지만 학습 전에 한 번은 돌리는 게 안전해요.
+
+```bash
+PARALLEL=8 bash ~/aihub-no-pain-71349/verify/verify_zips.sh
+```
+
+### 환경변수
+
+| 변수 | 기본값 | 설명 |
 |---|---|---|
-| `ok` | zip 정상, 잔재 없음 | 그대로 둠 |
-| `broken` | zip 있지만 `unzip -tq` 실패 | 잔재 정리 + 재다운로드 |
-| `missing` | zip 없고 `.part*` 잔재만 있음 | 잔재 정리 + 재다운로드 |
-| `residue_only` | zip 정상 + `.part*` 잔재 남음 | part만 정리 |
-| `never_downloaded` | filelist에 있지만 디스크에 흔적 0 | 재다운로드 |
+| `PARALLEL` | `4` | 병렬 작업 수. NFS는 8, 로컬 NVMe는 16+ 권장 |
+| `BASE_DIR` | `.` | 검사 대상 디렉토리 |
 
-여기에 추가로 `download.tar` 잔재도 별도 식별·제거합니다.
-
----
-
-## 2. 전체 워크플로우
+### 기대 출력
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│  Step 0: 사전 준비                                                 │
-│    - aihubshell 설치                                                │
-│    - export AIHUB_APIKEY='...'                                     │
-│    - filelist 생성 (한 번만)                                         │
-└──────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌──────────────────────────────────────────────────────────────────┐
-│  Step 1: 풀 다운로드 (처음 받는 경우만)                              │
-│    $ aihubshell -mode d -datasetkey 71349 -aihubapikey "$AIHUB_..."  │
-└──────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌──────────────────────────────────────────────────────────────────┐
-│  Step 2: 빠른 진단 (check_aihub.sh) — 수 초                          │
-│    $ ./check_aihub.sh                                                │
-│    → filelist vs 디스크 비교, 누락·잔재 식별                          │
-└──────────────────────────────────────────────────────────────────┘
-                              │
-                  ┌───────────┴───────────┐
-                  ▼                       ▼
-              모든 ✓ ?                  이상 발견 ?
-                  │                       │
-                  ▼                       ▼
-            Step 3로 진행          Step 4 (복구) →
-                                       Step 2 재실행
-                              │
-                              ▼
-┌──────────────────────────────────────────────────────────────────┐
-│  Step 3: 무결성 검증 (verify_zips.sh) — 수 분~수십 분                │
-│    $ ./verify_zips.sh                                                │
-│    → 모든 zip 병렬 unzip -tq                                          │
-└──────────────────────────────────────────────────────────────────┘
-                              │
-                  ┌───────────┴───────────┐
-                  ▼                       ▼
-              모든 ✓ ?                  깨진 파일 발견
-                  │                       │
-                  ▼                       ▼
-            학습 시작 OK            Step 4 (복구)
-                                       │
-                                       ▼
-┌──────────────────────────────────────────────────────────────────┐
-│  Step 4: 자동 복구 (repair_aihub.sh)                                 │
-│    $ DRY_RUN=1 ./repair_aihub.sh   # 먼저 미리보기                   │
-│    $ ./repair_aihub.sh             # 실제 실행                       │
-│    → 잔재 정리 + filekey batch 재다운로드                            │
-└──────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-                         Step 2로 복귀 (수렴 확인)
-```
+============================================
+  zip 무결성 검증
+============================================
+대상 zip: 1412개, 병렬: 8
 
-**원칙**: 가벼운 도구부터 시작해서 무거운 도구로 escalation. `check` → `verify` → `repair` 순서.
-
----
-
-## 3. 사전 준비
-
-### 3-1. `aihubshell` 설치 확인
-
-```bash
-command -v aihubshell
-aihubshell -help
-```
-
-설치가 안 됐다면 [AI Hub 공식 가이드](https://aihub.or.kr/devsport/apishell/list.do)를 참고하세요.
-
-### 3-2. API 키 등록
-
-```bash
-# 일회용
-export AIHUB_APIKEY='발급받은-API-키'
-
-# 영구 등록 (~/.bashrc 또는 ~/.zshrc)
-echo "export AIHUB_APIKEY='...'" >> ~/.bashrc
-chmod 600 ~/.bashrc           # 공용 서버라면 권한 잠그기
-source ~/.bashrc
-```
-
-### 3-3. filelist 한 번 떠두기 (필수)
-
-세 스크립트 모두 filelist를 기준으로 동작하므로 **반드시 먼저 생성**해야 합니다.
-
-```bash
-cd /data1/your_dataset_dir/
-aihubshell -mode l -datasetkey 71349 -aihubapikey "$AIHUB_APIKEY" > filelist_71349.txt
-```
-
-생성된 파일 확인:
-```bash
-head -20 filelist_71349.txt
-wc -l filelist_71349.txt
-```
-
-> 💡 **filelist 포맷 예시**:
-> ```
->             │  │  ├─TS_구연체_001.zip | 560 MB | 559997
->             │  │  ├─TS_구연체_005.zip | 657 MB | 559998
->             │  │  ├─TS_낭독체_001.zip | 127 MB | 560047
-> ```
-> 트리 문자 `│`, `├`, `─`와 들여쓰기 공백이 들어있어도 v2 스크립트가 자동 처리합니다.
-
-### 3-4. 스크립트 배치
-
-```bash
-cd /data1/your_dataset_dir/
-cp /path/to/aihub-repair/*.sh .
-chmod +x check_aihub.sh verify_zips.sh repair_aihub.sh
-```
-
-**중요**: 스크립트는 데이터셋 폴더(`133.감성_및_발화_스타일_...`)가 위치한 **상위 디렉토리**에서 실행하세요. `ROOT` 기본값이 `./133.감성_...`이라서요.
-
-### 3-5. 디스크 공간 확인
-
-데이터셋 명목 크기의 **최소 2.5배** 여유 공간이 필요합니다:
-- 원본 zip × 1
-- 다운로드 중 part 잔재 × 1
-- 병합 시 임시 공간 × 0.5
-
-```bash
-df -h .
-# Available 항목 확인
-```
-
----
-
-## 4. `check_aihub.sh` 상세
-
-### 역할
-filelist와 디스크를 빠르게 비교해서 표면적 이상을 식별합니다.
-
-### 실행
-
-```bash
-./check_aihub.sh
-
-# 옵션
-DEBUG=1 ./check_aihub.sh              # 파싱 결과 출력 (디버깅용)
-SHOW_DETAILS=0 ./check_aihub.sh       # 통계만 (CI/스크립트용)
-USE_COLOR=0 ./check_aihub.sh          # 색깔 끄기
-```
-
-### 출력 해석
-
-**정상 케이스**:
-```
-📊 개수 비교
-  filelist 등록 zip : 1412
-  디스크 zip        : 1412
-  part 잔재         : 0
-  download.tar 잔재 : 0
-
-✓ 모든 zip 파일이 정상적으로 다운로드되었습니다.
-  (단, zip 내부 무결성은 별도 검증 필요: ./verify_zips.sh)
-```
-
-**이상 발견 케이스**:
-```
-✗ 이상 발견:
-  - 누락 파일: 3건
-  - part 잔재: 2건
-
-📋 누락된 파일 상세
-─────────────────────────────────────────────────────────────────────
-파일명(정규화)                            용량       filekey
-─────────────────────────────────────────────────────────────────────
-VS_애니체_043.zip                         5.2 GB     84751
-VL_낭독체_012.zip                         1.8 GB     84823
-TS_중계체_007.zip                         3.4 GB     84802
-─────────────────────────────────────────────────────────────────────
-
-💡 복구 방법
-  (A) 자동 복구:    ./repair_aihub.sh
-  (B) 수동 명령:    aihubshell -mode d -datasetkey 71349 \
-                                -filekey '84751,84823,84802' \
-                                -aihubapikey "$AIHUB_APIKEY"
-```
-
-### DEBUG 모드 활용
-
-처음 실행 시 또는 매칭이 안 될 때 한 번 돌려보세요:
-
-```bash
-DEBUG=1 ./check_aihub.sh 2>&1 | head -30
-```
-
-기대 출력:
-```
-[DEBUG] L1: name=[TS_구연체_001.zip] size=[560 MB] key=[559997]
-[DEBUG] L2: name=[TS_구연체_005.zip] size=[657 MB] key=[559998]
+[1/1412] ✓ TS_구연체_001.zip
+[2/1412] ✓ TS_구연체_005.zip
 ...
-[DEBUG] disk=[TS_구연체_001.zip] norm=[TS_구연체_001.zip] → filelist 매칭 ✓
-[DEBUG] disk=[TS_구연체_005.zip] norm=[TS_구연체_005.zip] → filelist 매칭 ✓
-```
 
-`매칭 ✓`이 떠야 정상. `매칭 ✗`이면 filelist 포맷 또는 인코딩 문제 → [트러블슈팅](#9-트러블슈팅) 참고.
-
-### 종료 코드
-- `0`: 모든 검증 통과
-- `1`: 이상 발견 (누락 파일 또는 잔재)
-
----
-
-## 5. `verify_zips.sh` 상세
-
-### 역할
-모든 zip 파일을 병렬로 `unzip -tq` 검증합니다. zip 내부의 CRC까지 확인.
-
-### 실행
-
-```bash
-./verify_zips.sh                       # 기본 (PARALLEL=8)
-PARALLEL=16 ./verify_zips.sh           # 16개 병렬
-SHOW_DETAILS=0 ./verify_zips.sh        # 통계만
-```
-
-### 소요 시간 예상
-
-| 디스크 | PARALLEL=8 | PARALLEL=16 | 비고 |
-|---|---|---|---|
-| 로컬 NVMe SSD | 5~10분 | 3~7분 | I/O 매우 빠름 |
-| 로컬 SATA SSD | 15~25분 | 12~20분 | |
-| NFS | 20~40분 | 15~30분 | 네트워크 대역폭 병목 |
-| HDD | 40분~1시간+ | 거의 동일 | 디스크 병목 |
-
-**기준**: 1412개 zip, 평균 600MB (총 약 850GB).
-
-### 출력 해석
-
-**정상**:
-```
-🔍 검증 시작 (1412개, 병렬 8)
-
-📊 검증 결과 (47초)
-  정상 : 1412건
-  깨짐 : 0건
+=== 결과 ===
+  소요 시간: 1733초 (28.8분)
+  정상     : 1412
+  손상     : 0
 
 ✓ 모든 zip 무결성 통과
 ```
 
-**깨진 파일 발견**:
-```
-✗ 깨진 zip 발견
+손상된 zip이 있으면 자동으로 `damaged_zips.txt`에 기록됩니다.
 
-📋 깨진 파일 상세
-─────────────────────────────────────────────────────────────────────
-파일명(정규화)                            용량       filekey
-─────────────────────────────────────────────────────────────────────
-VS_애니체_004.zip                         3.1 GB     84751
-TS_중계체_012.zip                         4.5 GB     84823
-─────────────────────────────────────────────────────────────────────
+### 2-3. 자동 복구 — `repair_aihub.sh`
 
-💡 복구 방법
-  (A) 자동 복구:    ./repair_aihub.sh
-  (B) 수동 명령:    aihubshell -mode d -datasetkey 71349 \
-                                -filekey '84751,84823' \
-                                -aihubapikey "$AIHUB_APIKEY"
+`check_aihub.sh`와 `verify_zips.sh` 결과를 종합해 누락·손상 파일을 **자동 재다운로드**합니다.
+
+```bash
+# AI Hub 계정 정보 환경변수로 전달
+AIHUB_ID=<your_id> AIHUB_PW=<your_pw> \
+  bash ~/aihub-no-pain-71349/verify/repair_aihub.sh
 ```
 
-### 종료 코드
-- `0`: 모든 zip 정상
-- `1`: 깨진 zip 발견 또는 검증 불가
+### 처리되는 5가지 케이스
+
+| 케이스 | 의미 | 조치 |
+|---|---|---|
+| `ok` | 정상 zip | 건너뜀 |
+| `broken` | 깨진 zip | 삭제 후 재다운로드 |
+| `missing` | filelist에는 있는데 파일 없음 | 다운로드 |
+| `residue_only` | `.part`만 있음 | 잔여물 정리 후 다운로드 |
+| `never_downloaded` | 한 번도 받지 않음 | 다운로드 |
+
+추가로 `download.tar` 잔여물도 자동 정리합니다.
+
+### 기대 출력
+
+```
+[케이스 분류 중...]
+  ok               : 1410
+  broken           : 0
+  missing          : 2
+  residue_only     : 0
+  never_downloaded : 0
+  download.tar     : 1개 → 정리됨
+
+[복구 시작]
+  Downloading: TS_애니체_098.zip ... ✓
+  Downloading: VL_친절체_021.zip ... ✓
+
+[복구 후 재검증]
+  모든 케이스 정상
+
+✓ 복구 완료. 다음 단계: preprocess/
+```
 
 ---
 
-## 6. `repair_aihub.sh` 상세
+## 3. 압축 해제
 
-### 역할
-검증·정리·재다운로드를 한 번에 수행. 5가지 상태를 모두 처리합니다.
+### 3-1. zip 정리 — `move_zips_to_zips_dir.sh`
 
-### 실행
-
-```bash
-# 검증만 (디스크 변경 X)
-DRY_RUN=1 ./repair_aihub.sh
-
-# 실제 실행
-./repair_aihub.sh
-
-# 일부 화자만 받은 상태에서 그것만 복구
-INCLUDE_NEVER_DOWNLOADED=0 ./repair_aihub.sh
-
-# 작은 batch로 부담 분산
-BATCH=20 ./repair_aihub.sh
-```
-
-### 동작 단계
-
-```
-[1/3] 데이터셋 상태 점검
-   ├─ (1-A) 모든 zip 무결성 검증 (순차)
-   ├─ (1-B) part 잔재 식별 (.part0, .part1073741824 등)
-   ├─ (1-C) download.tar 잔재 식별
-   ├─ (1-D) filelist 파싱 → ground truth 구축
-   ├─ (1-E) never_downloaded 식별 (filelist vs 디스크)
-   ├─ (1-F) 5가지 상태 통계 출력
-   └─ (1-G) 잔재 정리 (DRY_RUN=0일 때만)
-            ├─ download.tar 제거
-            ├─ broken/missing/never_downloaded → zip + part 모두 제거
-            └─ residue_only → part만 제거 (zip 보존)
-
-[2/3] filekey 매핑
-   └─ unhealthy 파일들의 filekey 추출
-
-[3/3] batch 재다운로드
-   └─ filekey를 BATCH 크기씩 묶어 aihubshell -filekey 호출
-```
-
-### 권장 실행 패턴
+AI Hub 다운로드 폴더 구조는 깊고 복잡합니다. 이 스크립트는 **모든 zip을 `zips/`라는 한 폴더로 모으되, 원래 경로 구조는 보존**합니다.
 
 ```bash
-# 1) 항상 dry-run으로 먼저 확인
-DRY_RUN=1 ./repair_aihub.sh
+cd /data/aihub_71349/
 
-# 출력을 보고 합리적이면 실제 실행
-./repair_aihub.sh 2>&1 | tee repair_$(date +%Y%m%d_%H%M%S).log
-
-# 수렴 확인 (깨진 파일이 0건이 될 때까지 반복)
-./repair_aihub.sh
-./repair_aihub.sh
+bash ~/aihub-no-pain-71349/preprocess/move_zips_to_zips_dir.sh
 ```
 
-보통 2~3회 안에 수렴합니다. 매 반복마다 일부 batch가 재실패할 수 있어서 (네트워크 일시 끊김 등) 0건 될 때까지 돌리세요.
-
-### 50% 이상 누락 경고
-
-만약 filelist 전체의 50% 이상이 `never_downloaded`로 잡히면 다음 경고가 출력됩니다:
+### 변환 예시
 
 ```
-[WARN] 706/1412 (50%)가 다운로드 시도조차 안 된 상태입니다.
-       만약 일부만 의도적으로 받으셨다면 INCLUDE_NEVER_DOWNLOADED=0 로 실행하세요.
+변환 전:
+  ./133.감성.../01-1.정식개방데이터/Training/01.원천데이터/TS_구연체_001.zip
+
+변환 후:
+  ./zips/133.감성.../01-1.정식개방데이터/Training/01.원천데이터/TS_구연체_001.zip
 ```
 
-의도된 부분 다운로드라면 `INCLUDE_NEVER_DOWNLOADED=0`으로 실행해서 디스크에 있는 것만 복구하세요.
+원래 깊은 구조를 유지하기 때문에, 압축 해제 시에도 라벨↔원천 매핑이 자동으로 보존됩니다.
 
----
-
-## 7. 환경변수 완전 레퍼런스
-
-### 공통 (세 스크립트 모두)
+### 환경변수
 
 | 변수 | 기본값 | 설명 |
 |---|---|---|
-| `AIHUB_APIKEY` | (필수, repair만) | AI Hub API 키. `export` 권장 |
-| `DATASET_KEY` | `71349` | AI Hub 데이터셋 번호 |
-| `ROOT` | `./133.감성_및_발화_스타일_...` | 데이터 루트 디렉토리 |
-| `FILELIST` | `filelist_${DATASET_KEY}.txt` | filelist 파일 경로 |
-| `SHOW_DETAILS` | `1` | `0`이면 통계만 출력 |
-| `USE_COLOR` | `auto` | `0`/`1`로 강제 가능 |
-| `DEBUG` | `0` | `1`이면 파싱 디버그 정보 |
+| `BASE_DIR` | `.` | 검색 시작 디렉토리 |
+| `ZIPS_DIR` | `./zips` | zip을 모을 대상 디렉토리 |
+| `DRY_RUN` | `0` | 1이면 실제 이동 없이 시뮬레이션만 |
 
-### `verify_zips.sh` 전용
+### 3-2. 압축 해제 — `extract_zips.sh`
 
-| 변수 | 기본값 | 설명 |
-|---|---|---|
-| `PARALLEL` | `8` | 병렬 작업 수. CPU 코어 수만큼 권장 |
-
-### `repair_aihub.sh` 전용
-
-| 변수 | 기본값 | 설명 |
-|---|---|---|
-| `BATCH` | `50` | filekey batch 크기 |
-| `DRY_RUN` | `0` | `1`이면 디스크 변경 없이 시뮬레이션 |
-| `INCLUDE_NEVER_DOWNLOADED` | `1` | `0`이면 디스크 흔적 있는 것만 복구 |
-
-### 환경변수 한 번에 export
-
-자주 쓰는 데이터셋이라면 셸 함수로:
+`zips/`의 모든 zip을 `data/`로 병렬 압축 해제합니다.
 
 ```bash
-# ~/.bashrc 또는 ~/.zshrc
-aihub_133() {
-  export DATASET_KEY=71349
-  export ROOT='/data1/aihub/kor_senti_style_tts_dataset/133.감성_및_발화_스타일_동시_고려_음성합성_데이터'
-  export FILELIST='/data1/aihub/kor_senti_style_tts_dataset/filelist_71349.txt'
-  cd /data1/aihub/kor_senti_style_tts_dataset
-}
-
-aihub_464() {
-  export DATASET_KEY=464
-  export ROOT='/data1/aihub/multilingual/464.다국어_통번역_음성_데이터'
-  export FILELIST='/data1/aihub/multilingual/filelist_464.txt'
-  cd /data1/aihub/multilingual
-}
+PARALLEL=8 bash ~/aihub-no-pain-71349/preprocess/extract_zips.sh
 ```
 
-사용:
+### ⚠️ 알아두면 좋은 점 — 절대경로 Warning
+
+이 데이터셋의 zip은 내부 파일이 **절대경로(`/`)** 로 저장되어 있습니다:
+
+```
+zip 내부: /K-S1-C-034-0075.wav   (← 슬래시로 시작)
+```
+
+`unzip`은 보안상 `/`를 자동 제거하면서 다음과 같이 출력합니다:
+
+```
+warning: stripped absolute path spec from /K-S1-C-034-0075.wav
+  inflating: ./data/.../K-S1-C-034-0075.wav    ← 실제로는 정상 압축 해제됨
+```
+
+그리고 **exit code 1**을 반환해요. 압축은 완벽히 정상이지만, 이걸 모르면 모든 zip이 실패한 것처럼 보입니다.
+
+**이 스크립트는 exit code 0과 1을 모두 성공으로 처리**합니다. 별도 조치 불필요.
+
+### 환경변수
+
+| 변수 | 기본값 | 설명 |
+|---|---|---|
+| `ZIPS_DIR` | `./zips` | 입력 zip 폴더 |
+| `DATA_DIR` | `./data` | 출력 폴더 |
+| `PARALLEL` | `4` | 병렬 작업 수 |
+| `SKIP_EXISTING` | `1` | 이미 풀린 폴더는 건너뜀 |
+| `DRY_RUN` | `0` | 1이면 실제 실행 없이 계획만 표시 |
+| `VERBOSE` | `0` | 1이면 unzip 출력 그대로 표시 |
+
+### 기대 소요 시간
+
+| 환경 | PARALLEL | 예상 시간 |
+|---|---|---|
+| NFS | 4 | 2~3시간 |
+| NFS | 8 | 1.5~2시간 |
+| 로컬 NVMe | 8 | 30~60분 |
+| 로컬 NVMe | 16 | 20~40분 |
+
+### 진행 상황 모니터링 (다른 터미널에서)
+
 ```bash
-aihub_133            # 환경 세팅 + cd
-./check_aihub.sh     # 바로 실행 가능
+# 풀린 zip 폴더 개수
+watch -n 60 'find ./data -mindepth 4 -type d -not -empty | wc -l'
+
+# 또는 풀린 파일 총 개수
+watch -n 60 'find ./data -name "*.wav" | wc -l; df -i ./data | tail -1'
+```
+
+### 압축 해제 후 디렉토리
+
+```
+data/
+├── 133.../Training/
+│   ├── 01.원천데이터/
+│   │   ├── TS_구연체_001/
+│   │   │   ├── K-A1-C-034-0001.wav
+│   │   │   └── ...
+│   │   └── ...
+│   └── 02.라벨링데이터/
+│       ├── TL_구연체_001/
+│       │   ├── ...P03-A-009.json
+│       │   └── ...
+│       └── ...
+└── 133.../Validation/
+    ├── 01.원천데이터/  (VS_xxx/)
+    └── 02.라벨링데이터/  (VL_xxx/)
 ```
 
 ---
 
-## 8. 실전 시나리오
+## 4. 메타데이터 생성
 
-### 시나리오 A: 처음 받는 데이터셋
+`build_metadata.py`는 모든 JSON 라벨을 파싱해 **학습 가능한 메타데이터 CSV**를 만들고, 통계 txt와 화자별 CSV까지 자동 생성합니다.
+
+### 4-1. 기본 실행
 
 ```bash
-# 1) 환경 준비
-export AIHUB_APIKEY='...'
-mkdir -p /data1/aihub/new_dataset
-cd /data1/aihub/new_dataset
+cd /data/aihub_71349/
 
-# 2) filelist 미리 떠보고 포맷 확인
-aihubshell -mode l -datasetkey 71349 -aihubapikey "$AIHUB_APIKEY" > filelist_71349.txt
-head -20 filelist_71349.txt
-grep -oE '\.[a-z0-9]+ \|' filelist_71349.txt | sort -u   # zip만 있는지 확인
-
-# 3) 풀 다운로드
-aihubshell -mode d -datasetkey 71349 -aihubapikey "$AIHUB_APIKEY" 2>&1 | tee download.log
-
-# 4) 스크립트 복사 + 검증
-cp ~/aihub-repair/*.sh .
-chmod +x *.sh
-
-./check_aihub.sh                 # 표면 점검
-./verify_zips.sh                 # 무결성 검증
-
-# 5) 이상 있으면 복구 반복
-DRY_RUN=1 ./repair_aihub.sh
-./repair_aihub.sh
-./check_aihub.sh && ./verify_zips.sh   # 0건 될 때까지
+python3 ~/aihub-no-pain-71349/preprocess/build_metadata.py \
+  --data-dir ./data \
+  --base-dir "$PWD" \
+  --output-dir ./meta
 ```
 
-### 시나리오 B: 다운로드 중 디스크 부족으로 멈춤
+### 옵션
 
-```bash
-# 1) 좀비 프로세스 정리
-ps -ef | grep -E "aihubshell|java" | grep -v grep
-pkill -9 -f aihubshell
+| 옵션 | 기본값 | 설명 |
+|---|---|---|
+| `--data-dir` | `./data` | 압축 해제된 데이터 폴더 |
+| `--base-dir` | `data-dir.parent.parent` | `audio_path`의 기준 절대 경로 |
+| `--output-dir` | `./meta` | 출력 폴더 |
+| `--label-pattern` | `**/T[LV]_*/*.json` | JSON 검색 패턴 |
+| `--use-index` | `False` | wav 인덱스 미리 생성 (NFS stat 비용 절약) |
 
-# 2) 디스크 정리 후 더 큰 볼륨으로 이동
-df -h
-mv /home/user/aihub_data /data1/aihub_data
-cd /data1/aihub_data
+### `base_dir`이 중요한 이유
 
-# 3) 상태 점검
-./check_aihub.sh        # 어떤 파일이 깨졌는지/누락됐는지 확인
+CSV의 audio 경로는 두 컬럼으로 분리됩니다:
 
-# 4) 복구
-DRY_RUN=1 ./repair_aihub.sh    # 미리보기 (어떤 filekey가 재다운로드될지)
-./repair_aihub.sh              # 실제 실행
+```
+base_dir   : /data/aihub_71349
+audio_path : 133.../Training/01.원천데이터/TS_구연체_001/K-A1-C-034-0001.wav
 ```
 
-### 시나리오 C: 일부 화자만 받기로 한 경우
+이렇게 분리하면 데이터셋을 다른 서버로 옮길 때 `base_dir`만 갈아끼우면 끝납니다:
 
-```bash
-# 처음부터 -filekey로 일부만 받음
-aihubshell -mode d -datasetkey 71349 -filekey '12345,12346,12347' -aihubapikey "$AIHUB_APIKEY"
-
-# 받은 것만 검증 (누락은 의도된 것이므로 제외)
-INCLUDE_NEVER_DOWNLOADED=0 ./check_aihub.sh
-INCLUDE_NEVER_DOWNLOADED=0 ./repair_aihub.sh
+```python
+df['base_dir'] = '/new/path/aihub_71349'
+df.to_csv('metadata.csv', index=False)
 ```
 
-### 시나리오 D: 학습 직전 최종 검증
+### 4-2. 생성되는 출력물
 
-```bash
-# 매일 학습 시작 전
-./check_aihub.sh
-
-# 주 1회 (또는 데이터 의심될 때)
-./verify_zips.sh
-
-# 둘 다 ✓ 나오면 학습 시작
-python train.py --data_root /data1/aihub/...
+```
+meta/
+├── metadata.csv                       # 전체 메타데이터 (모든 컬럼)
+├── stats_overall.txt                  # 전체 통계 (split·성별·스타일·감정·duration)
+├── stats_per_speaker.txt              # 화자별 통계 (요약표 + 화자별 상세)
+├── stats_per_gender.txt               # 성별별 통계 (FEMALE/MALE 각각)
+└── metadatas_per_speaker/             # 화자별 CSV 분리
+    ├── speaker_001.csv
+    ├── speaker_002.csv
+    ├── ...
+    └── speaker_159.csv
 ```
 
-### 시나리오 E: 여러 데이터셋 동시 관리
+### 4-3. 콘솔 출력 예시
+
+```
+data_dir   : /data/aihub_71349/data
+base_dir   : /data/aihub_71349
+output_dir : /data/aihub_71349/meta
+
+JSON 라벨 파일 검색 중...
+  → 12,150개 JSON 발견
+  진행: 12150/12150
+  파싱 완료: 575,432개 row
+
+[1/4] metadata.csv      : ./meta/metadata.csv
+[2/4] stats_overall     : ./meta/stats_overall.txt
+[3/4] stats_per_speaker : ./meta/stats_per_speaker.txt
+      stats_per_gender  : ./meta/stats_per_gender.txt
+[4/4] 화자별 CSV        : ./meta/metadatas_per_speaker/ (89개)
+
+==================================================
+총 row 수    : 575,432
+고유 화자    : 89명
+split 분포   : {'train': 560624, 'valid': 14808}
+성별 분포    : {'FEMALE': 290000, 'MALE': 285432}
+audio 누락   : 0건 (0.00%)
+```
+
+> ⚠️ `audio 누락`이 많이 나오면 압축 해제가 미완료된 경우가 대부분입니다. `extract_zips.sh`를 다시 돌려서 완료 후 재실행하세요.
+
+---
+
+## 5. 데이터 탐색
+
+`explore_dataset.ipynb`는 **화자 ID를 선택하면 그 화자의 발화 샘플과 메타데이터를 함께 보여주는** 인터랙티브 노트북입니다.
+
+### 5-1. 노트북 실행
 
 ```bash
-# ~/.bashrc에 등록한 함수 활용
-aihub_133 && ./check_aihub.sh
-aihub_464 && ./check_aihub.sh
-aihub_595 && ./check_aihub.sh
+# 필수 패키지
+pip install pandas jupyter ipywidgets
+
+# 노트북 실행
+jupyter notebook ~/aihub-no-pain-71349/notebooks/explore_dataset.ipynb
+```
+
+또는 VSCode에서 `.ipynb` 파일을 직접 열어도 됩니다.
+
+### 5-2. 노트북 셀 구성
+
+| 셀 | 내용 |
+|---|---|
+| 1 | 환경 설정, metadata.csv 로드 |
+| 2 | 절대 경로 헬퍼 (`base_dir + audio_path`) |
+| 3 | 화자 정보 카드 출력 함수 |
+| 4 | 샘플 청취 함수 (필터·재생) |
+| 5 | 다양한 필터 조합 예시 (감정·스타일·강도·텍스트 검색) |
+| **6** | **인터랙티브 위젯** (드롭다운으로 화자 선택) |
+| 7 | 화자별 CSV 직접 로드 |
+| 8 | 학습용 데이터 필터링 체크리스트 |
+
+### 5-3. 인터랙티브 위젯 UI
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│ 화자 ID: [9 ▼]  발화체: [(전체) ▼]  감정: [분노 ▼]  강도: [3 ▼] │
+│ 샘플 수: ━●━━━━━━━━━ 5    seed: [42]   텍스트: [엄마      ] │
+│ [ℹ️ 화자 정보만]  [🔍 검색 + 재생]                              │
+├────────────────────────────────────────────────────────────────┤
+│ 🎤 화자 9                                                      │
+│ 성별: FEMALE  나이: 20세  총 발화: 1,234건  총 30.5분          │
+│                                                                │
+│ #1  A-A2-A-009-0101  |  애니체/남아  |  분노(강도 3)  |  3.4초 │
+│ tr:  지금 싸움을 외면하라는 겁니까, 동료들의 죽음에서 ...      │
+│ ptr: 지금 싸움을 외면하라는 겁니까 / 동료들의 죽음에서 / ...   │
+│ 📁 133.../TS_애니체_001/A-A2-A-009-0101.wav                    │
+│ [▶ ━━━━●━━━━ 0:02 / 0:03]                                    │
+│                                                                │
+│ #2 ... (다음 샘플 계속)                                        │
+└────────────────────────────────────────────────────────────────┘
+```
+
+### 5-4. 프로그래밍 인터페이스로 사용하기
+
+위젯 외에도 직접 함수를 호출할 수 있어요:
+
+```python
+# 화자 9번의 분노 감정 발화 3개
+play_samples_for_speaker(df, speaker_id=9, emotion="분노", n=3)
+
+# 남성 화자 중 친절체 발화
+samples = df[(df['reciter_gender']=='MALE') & (df['style']=='친절체')]
+
+# 특정 검수 점수 이상만
+clean = df[df['votes_avg'] >= 4.0]
 ```
 
 ---
 
-## 9. 트러블슈팅
+## 6. CSV 컬럼 레퍼런스
 
-### 9-1. "filelist 파싱 실패" 에러
+`metadata.csv`의 모든 컬럼:
 
+| 컬럼 | 타입 | 의미 | 예시 |
+|---|---|---|---|
+| `file_id` | str | 발화 고유 ID | `A-A2-A-009-0101` |
+| `script_id` | str | 대본 ID | `A-A201` |
+| `part_no` | int | 대본 파트 번호 | 3 |
+| `reciter_id` | int | 화자 번호 | 9 |
+| `reciter_age` | int | 화자 나이 | 20 |
+| `reciter_gender` | str | 화자 성별 | `FEMALE` / `MALE` |
+| `style` | str | 발화 스타일 | `애니체` |
+| `sub_style` | str | 서브 스타일 | `남아` |
+| `emotion` | str | 감정 | `분노` |
+| `intensity` | int | 감정 강도 | 1~3 |
+| `duration` | float | 실제 발화 길이 (초) | 3.42 |
+| `file_duration` | float | wav 전체 길이 (앞뒤 0.25s 묵음 포함) | 3.92 |
+| `duration_valid` | bool | `duration <= file_duration` 인지 | True |
+| `duration_effective` | float | `max(duration, file_duration)` | 3.92 |
+| `text_origin` | str | 원문 텍스트 | "..." |
+| `text_tr` | str | **철자 전사** (TTS 입력용) | "지금 싸움을..." |
+| `text_ptr` | str | **발음 전사** (끊어 읽기 `/` 표시, 프로소디용) | "지금 싸움을 외면하라는 겁니까 /..." |
+| `wav_filename` | str | wav 파일명 | `A-A2-A-009-0101.wav` |
+| `base_dir` | str | 공통 base 절대 경로 | `/data/aihub_71349` |
+| `audio_path` | str | **base_dir 기준 상대 경로** ⭐ | `133.../TS_애니체_001/A-A2-A-009-0101.wav` |
+| `audio_relpath` | str | `data_dir` 기준 상대 경로 (호환성) | `133.../TS_애니체_001/A-A2-A-009-0101.wav` |
+| `audio_exists` | bool | wav 파일 실제 존재 여부 | True |
+| `label_relpath` | str | JSON 라벨 상대 경로 | `133.../TL_애니체_001/A-A201-P03-A-009.json` |
+| `votes_avg` | float | 검수자 평가 평균 (1~5 Likert) | 4.67 |
+| `votes_count` | int | 검수자 수 | 3 |
+| `src_type` | str | 출처 유형 | `작품` |
+| `studio_id` | str | 녹음실 ID | `A` |
+| `studio_name` | str | 녹음실 이름 | `스튜디오1` |
+| `sample_rate` | int | 샘플 레이트 | 44100 |
+| `recorded_at` | str | 녹음 일시 | `2022-10-18 04:44:21` |
+| `split` | str | 학습/검증 분할 | `train` / `valid` |
+| `zip_basename` | str | 원본 zip 폴더명 | `TL_애니체_001` |
+
+### 학습용 절대 경로 만들기
+
+```python
+from pathlib import Path
+import pandas as pd
+
+df = pd.read_csv('./meta/metadata.csv')
+
+# 한 행의 wav 절대 경로
+row = df.iloc[0]
+audio_abspath = Path(row['base_dir']) / row['audio_path']
+print(audio_abspath)
+# /data/aihub_71349/133.../TS_애니체_001/A-A2-A-009-0101.wav
 ```
-[ERROR] filelist 파싱 0건. 포맷 확인:
-        head -20 filelist_71349.txt
-```
 
-**원인**: filelist에 `.zip` 라인이 없거나 포맷이 예상과 다름.
+---
 
-**진단**:
+## 7. 트러블슈팅 FAQ
+
+### FAQ 1. inode란 무엇인가요?
+
+inode는 파일시스템에서 **파일 1개의 메타데이터를 담는 자료구조**입니다. 파일시스템 생성 시 inode 개수가 고정되어 있어요. AI Hub 데이터셋은 작은 파일을 56만 개 생성하므로 inode가 부족하면 압축 해제가 실패할 수 있습니다.
+
 ```bash
-# 보이지 않는 문자 포함해서 첫 5줄 보기
-head -5 filelist_71349.txt | cat -A
+# inode 사용 현황 확인
+df -i /your/path
 
-# 인코딩 확인
-file filelist_71349.txt
-# → UTF-8이어야 함
-
-# 한 라인의 hex 덤프
-grep -m1 ".zip" filelist_71349.txt | hexdump -C | head -3
+# IUse%가 80% 미만이면 안전, 95% 이상이면 위험
 ```
 
-**해결**:
-- `file` 결과가 UTF-8이 아니면: `iconv`로 변환
-- 라인에 `.zip`이 없으면: aihubshell 출력 형식이 변경됐을 수 있음, AI Hub 문의
+대처법:
+- 불필요한 작은 파일(캐시, `__pycache__`, `.git`) 삭제
+- 다른 파일시스템(inode 여유 있는)으로 이동
+- 미사용 파일은 zip으로 보관
 
-### 9-2. "멀쩡한 파일을 누락이라고 표시함"
+### FAQ 2. 압축 해제 중 멈춘 것처럼 보여요
 
-**증상**: 디스크에 분명히 있는 파일이 `누락 파일` 목록에 나옴.
+NFS 환경에서 1~3시간 걸리는 게 정상입니다. 다음 명령으로 진행 여부 확인:
 
-**원인** (가능성 순):
-1. filelist의 트리 문자(`│`, `├`) 또는 들여쓰기 공백
-2. 디스크와 filelist 인코딩 차이 (UTF-8 NFC vs NFD)
-3. 한글 자모 분리 (macOS HFS+)
-
-**진단**:
-```bash
-DEBUG=1 ./check_aihub.sh 2>&1 | head -40
-```
-
-`매칭 ✓`이 떠야 정상. `매칭 ✗`이면:
-
-```bash
-# filelist의 파일명 한 줄 hex
-grep -m1 "TS_구연체_001" filelist_71349.txt | hexdump -C | head -3
-
-# 디스크 파일의 hex
-find . -name "TS_구연체_001.zip" -printf "%f\n" | head -1 | hexdump -C
-```
-
-두 hex가 다르면 인코딩 또는 정규화 문제. v2 스크립트는 공백 정규화는 자동 처리하지만, NFC/NFD 차이는 별도 처리 필요. 발생 시 이슈 등록 부탁.
-
-### 9-3. `Ctrl+C`로 aihubshell이 안 죽음
-
-**원인**: aihubshell이 Java 자식 프로세스를 띄우는데, 자식이 SIGINT를 무시.
-
-**해결**:
 ```bash
 # 다른 터미널에서
-pkill -TERM -f aihubshell    # 부드럽게
-sleep 5
-pkill -KILL -f aihubshell    # 강제
-
-# 또는 SIGQUIT (Ctrl+\)
-# WezTerm을 쓰면 Ctrl+Shift+\ 매핑 추천
+find ./data -name "*.wav" | wc -l
+# 숫자가 증가 중이면 정상 진행 중
 ```
 
-종료 후:
+5분 안에 새 파일이 0개라면 stuck일 수 있어요. 이때는 Ctrl+C로 중단 후 재시작 (SKIP_EXISTING=1 기본이라 이어서 진행됨).
+
+### FAQ 3. `audio 파일 누락: NNNNNN건` 이라고 나와요
+
+대부분 압축 해제가 완료되지 않은 경우입니다. 다음 순서로 확인:
+
 ```bash
-./repair_aihub.sh    # 잔재 자동 정리
+# 1) 전체 wav 개수 (50만+여야 정상)
+find ./data -name "*.wav" | wc -l
+
+# 2) Validation 폴더도 풀렸는지
+find ./data -path "*/Validation/*" -name "*.wav" | wc -l
+
+# 3) 풀리지 않은 zip이 있다면 재실행 (이어서)
+bash ~/aihub-no-pain-71349/preprocess/extract_zips.sh
 ```
 
-### 9-4. 디스크 부족으로 다운로드 실패
+압축 해제가 완료됐는데도 누락이 나오면 `--use-index` 옵션을 추가해보세요:
 
-**증상**: `aihubshell` 로그에 `No space left on device`.
-
-**원인**: 다운로드 + 병합 시 일시적으로 데이터셋 명목 크기의 2배 공간 필요.
-
-**해결**:
 ```bash
-# 더 큰 볼륨 찾기
-df -h | sort -k4 -h
-
-# 데이터셋 옮기기 (받다 만 잔재 포함)
-mv 133.감성_* /data1/aihub/
-
-# /data1에서 재시도
-cd /data1/aihub
-./repair_aihub.sh    # 잔재 정리 후 재다운로드
+python3 build_metadata.py --data-dir ./data --output-dir ./meta --use-index
 ```
 
-### 9-5. NFS/원격 디스크에서 `verify_zips.sh` 너무 느림
+### FAQ 4. `unzip: warning: stripped absolute path spec` 가 무수히 출력돼요
 
-**원인**: 네트워크 대역폭 병목.
+이건 **정상**입니다. 데이터셋의 zip 내부 파일이 절대경로로 저장되어 있어서 unzip이 보안 메시지를 출력하는 거예요. 압축 해제는 완벽히 정상적으로 진행되고, `extract_zips.sh`가 이를 자동으로 처리합니다.
 
-**해결**:
-- 로컬 디스크로 데이터셋 이동
-- 또는 `PARALLEL`을 늘려보기 (어차피 대역폭 한계지만 미세하게는 빨라짐)
-- 또는 검증을 야간에 백그라운드로:
-  ```bash
-  nohup ./verify_zips.sh > verify_$(date +%Y%m%d).log 2>&1 &
-  ```
+자세한 설명: [README #핵심 기능](README.md#-핵심-기능)
 
-### 9-6. `bash 4.0+` 에러 (macOS)
+### FAQ 5. 한국어 폴더명 때문에 깨져요
 
-**증상**: `[ERROR] bash 4.0+ 필요`
+UTF-8 로케일을 사용하는지 확인하세요:
 
-**해결**: macOS 기본 bash는 3.2 (라이선스 문제). `brew install bash`로 4+ 설치:
 ```bash
-brew install bash
-which bash                    # /usr/local/bin/bash 또는 /opt/homebrew/bin/bash
-/opt/homebrew/bin/bash --version
-/opt/homebrew/bin/bash ./check_aihub.sh
+locale
+# LANG=en_US.UTF-8 또는 ko_KR.UTF-8 이어야 정상
+
+# 만약 C 로케일이면 변경
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
 ```
 
-### 9-7. 50%+ 누락 경고가 부정확함
+### FAQ 6. 학습용으로 추천하는 필터링 기준은?
 
-**증상**: 일부만 의도적으로 받았는데 50%+ 누락 경고가 뜸.
+데이터셋 자체에 품질 라벨(`votes_avg`)이 있어요. 권장 필터:
 
-**해결**:
+```python
+df_clean = df[
+    df['audio_exists'] &           # wav 실제 존재
+    df['duration_valid'] &         # duration ≤ file_duration
+    df['text_tr'].notna() &        # 전사 텍스트 존재
+    df['duration'].between(0.5, 20) &  # 너무 짧거나 긴 거 제외
+    df['votes_avg'] >= 3.5         # 검수자 평균 평가 보통 이상
+]
+```
+
+### FAQ 7. 화자 ID 1~159 중 89명만 있어요
+
+정상입니다. 데이터셋 가이드라인에 따르면 ID는 1~159 범위에서 부여되지만 실제 참여 화자는 89명(성우 73명 + 일반인 16명)입니다. ID에 빈 번호가 있는 게 정상이에요.
+
+### FAQ 8. 다운로드 도중 끊었어요. 처음부터 다시 해야 하나요?
+
+아니요. `aihubshell`이 받다 만 파일은 `verify/repair_aihub.sh`가 자동으로 식별·재다운로드합니다:
+
 ```bash
-INCLUDE_NEVER_DOWNLOADED=0 ./repair_aihub.sh
+# 다운로드 재개
+bash ~/aihub-no-pain-71349/verify/check_aihub.sh   # 진단
+bash ~/aihub-no-pain-71349/verify/repair_aihub.sh  # 복구
 ```
-이러면 디스크에 있는 것만 복구 대상으로 처리됩니다.
+
+### FAQ 9. WSL2에서 사용 가능한가요?
+
+네, 검증되었습니다. 다만 다음에 주의:
+- WSL2의 기본 디스크는 `/mnt/c/`(Windows 드라이브)인데 매우 느립니다. WSL2 네이티브 파일시스템(`/home/user/...`) 또는 별도 Linux 디스크 사용 권장
+- 한국어 폴더명을 위해 UTF-8 로케일 설정
+
+### FAQ 10. 데이터셋 라이선스가 어떻게 되나요?
+
+AI Hub의 이용약관을 따릅니다. 이 레포는 도구만 제공하며 데이터셋 자체를 배포하지 않습니다. 상업적 사용·재배포 관련은 AI Hub 공식 문서를 확인하세요.
 
 ---
 
-## 10. FAQ
+## 🔗 관련 자료
 
-**Q1. 데이터셋이 너무 커서 `verify_zips.sh`가 1시간 이상 걸려요.**
-
-A. 정상입니다. 다음을 시도해 보세요:
-- 데이터셋을 로컬 NVMe SSD로 이동 (10배 빠름)
-- `PARALLEL=16` 또는 `32`로 늘림 (단, 디스크 대역폭이 상한선)
-- 매일 돌리지 말고 학습 직전 1회만
-
-**Q2. 같은 데이터셋을 두 곳에 두고 비교하고 싶어요.**
-
-A. `ROOT` 환경변수만 바꿔서 두 번 실행하면 됩니다:
-```bash
-ROOT='/data1/aihub_a/133.감성_...' ./check_aihub.sh
-ROOT='/data2/aihub_b/133.감성_...' ./check_aihub.sh
-```
-
-**Q3. 부분 다운로드 진행률 표시는 어떻게 보나요?**
-
-A. `aihubshell` 자체가 출력하는 진행률을 보세요. `repair_aihub.sh`의 `[3/3]` 단계에서 `aihubshell`이 호출될 때 그 stdout이 그대로 표시됩니다. 로그 저장:
-```bash
-./repair_aihub.sh 2>&1 | tee repair.log
-```
-
-**Q4. `Ctrl+C`로 `verify_zips.sh`를 중단하면 안전한가요?**
-
-A. 안전합니다. `verify_zips.sh`는 디스크에 쓰지 않고 읽기만 합니다. 중단해도 데이터 손상 없습니다. `repair_aihub.sh`는 잔재 정리 단계 직전이라면 안전하지만, 정리 도중 중단하면 부분 정리 상태가 될 수 있어요. 그래도 다시 돌리면 자동으로 마무리됩니다.
-
-**Q5. zip이 아닌 다른 형식의 데이터셋도 처리할 수 있나요?**
-
-A. 현재는 `.zip`만 지원합니다 (`unzip -tq`로 검증). `.tar.gz`나 `.7z`는 별도 스크립트가 필요해요. 거의 모든 AI Hub 데이터셋이 zip 기반이라 일반적인 경우엔 문제 없습니다.
-
-**Q6. CI/자동화에 통합하고 싶어요.**
-
-A. `SHOW_DETAILS=0 USE_COLOR=0`으로 깔끔한 출력을, 종료 코드로 결과 판정:
-```bash
-#!/bin/bash
-SHOW_DETAILS=0 USE_COLOR=0 ./check_aihub.sh
-if [ $? -eq 0 ]; then
-    echo "OK"
-else
-    # 알림 보내기
-    curl -X POST https://hooks.slack.com/...
-fi
-```
-
-**Q7. 검증 결과를 저장해 두고 다음에 변경된 파일만 검증할 수 있나요?**
-
-A. 현재 버전은 매번 전체 검증입니다. 캐싱 기능은 미구현. 필요하시면 이슈로 알려주세요.
-
-**Q8. 다른 데이터셋 번호의 filelist도 같은 디렉토리에 두고 싶어요.**
-
-A. `FILELIST` 환경변수를 다르게 지정하면 됩니다:
-```bash
-FILELIST=filelist_71349.txt ./check_aihub.sh
-FILELIST=filelist_464.txt ./check_aihub.sh
-```
-
-**Q9. 스크립트 안에 데이터셋 별 default를 박아두고 싶어요.**
-
-A. 권장하지 않습니다. 환경변수로 외부에서 지정하는 패턴이 재활용성이 높아요. 자주 쓰는 데이터셋이면 셸 함수로 등록하세요 ([7-3 환경변수 한 번에 export](#환경변수-한-번에-export) 참고).
-
-**Q10. 학습 데이터 무결성을 매번 확인해야 할까요?**
-
-A. 일반적으로 한 번 통과하면 안 깨집니다. 다만 디스크 이동, 백업/복원, 네트워크 전송 후엔 한 번 더 검증하는 게 안전합니다. 학습 결과가 이상하면 데이터 무결성부터 의심하세요.
+- [데이터셋 구축 가이드라인 PDF](docs/감성및발화스타일동시고려음성합성데이터_구축활용_가이드라인.pdf) — JSON 스키마, 발화 스타일 정의, 라벨링 기준
+- [데이터 설명서 PDF](docs/2-012-133_데이터설명서_감성_및_발화스타일_음성합성_데이터.pdf) — 통계, 분포, 활용 분야
+- [AI Hub 공식 페이지](https://www.aihub.or.kr)
+- 메인 [README.md](README.md)
 
 ---
 
-## 📚 참고 자료
-
-- [AI Hub 공식 사이트](https://aihub.or.kr/)
-- [aihubshell 가이드](https://aihub.or.kr/devsport/apishell/list.do)
-- [README.md (요약)](./README.md)
-
----
-
-## 🐛 이슈 등록
-
-문제 발생 시 다음 정보와 함께 이슈를 등록해주세요:
-
-1. 실행한 명령어
-2. 출력 (특히 에러 메시지)
-3. `DEBUG=1` 모드 출력
-4. 환경: `bash --version`, `locale`, `file filelist_*.txt`
-5. filelist 첫 5줄 (`head -5 filelist_*.txt`)
-
-이 정보가 있으면 디버깅이 훨씬 빨라집니다.
+문의 사항이나 버그는 GitHub Issues에 등록해주세요!
