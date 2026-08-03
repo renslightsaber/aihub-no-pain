@@ -1,0 +1,75 @@
+# ============================================================
+# requirements_h200.txt
+# aihub-no-pain-71349 — 전처리 + 탐색 실행 환경
+#
+# 기준 Python : 3.10.20
+# 검증 대상   : preprocess/build_metadata.py
+#               notebooks/explore_dataset.ipynb
+#
+# 설치:
+#   python3.10 -m venv .venv && source .venv/bin/activate
+#   pip install -U pip setuptools wheel
+#   pip install -r requirements_h200.txt
+#
+# 주의: 이 파일은 "데이터 준비 파이프라인"에 필요한 최소 의존성입니다.
+#       GPU(H200) 학습 프레임워크는 아래 [선택] 블록 참고.
+# ============================================================
+
+# ---- 코어 (build_metadata.py) --------------------------------
+# build_metadata.py 가 직접 쓰는 서드파티 패키지는 pandas 하나뿐입니다.
+# (argparse / json / pathlib / typing 은 표준 라이브러리)
+pandas==2.2.2
+# pandas 백엔드. numpy 2.x 는 다른 오디오/학습 패키지와 충돌이 잦아 1.26.x 고정.
+numpy==1.26.4
+
+# [선택] 57만 row CSV 를 parquet 으로 바꿔 쓰거나 pandas 의 pyarrow 엔진을 쓸 때만 필요.
+# 레포 코드 자체는 요구하지 않습니다.
+# pyarrow==17.0.0
+
+# ---- 노트북 탐색 (explore_dataset.ipynb) ----------------------
+# 사용 API: pandas, pathlib, IPython.display(Audio/display/HTML/clear_output),
+#           ipywidgets(Dropdown/HBox/VBox/Layout/Button/Text/Output/IntText/IntSlider)
+ipython==8.27.0
+ipykernel==6.29.5
+
+# ⚠️ ipywidgets 는 반드시 8.x 를 쓰세요.
+#    JupyterLab 4 / Notebook 7 에서는 ipywidgets 7.x 위젯이 렌더링되지 않습니다
+#    (7.x 는 nbextension 방식, 8.x 는 prebuilt lab extension 방식).
+ipywidgets==8.1.5
+jupyterlab_widgets==3.0.13
+widgetsnbextension==4.0.13
+
+jupyterlab==4.2.5
+notebook==7.2.2
+
+# IPython.display.Audio 는 wav 파일 경로를 그대로 임베드하므로
+# soundfile/librosa 없이도 44.1kHz wav 재생이 됩니다. (추가 의존성 불필요)
+
+# ============================================================
+# [선택] 오디오 분석을 직접 할 때만 주석 해제
+#   - build_metadata.py 는 duration 을 JSON 라벨에서 읽으므로 불필요합니다.
+#   - wav 를 직접 열어 검증/리샘플링하려면 아래를 사용하세요.
+# ============================================================
+# soundfile==0.12.1
+# librosa==0.10.2.post1
+# scipy==1.14.1
+# matplotlib==3.9.2
+# tqdm==4.66.5
+
+# ============================================================
+# [선택] H200(Hopper, sm_90) 학습 스택
+#   PyTorch 는 PyPI 기본 인덱스가 아닌 CUDA 휠을 쓰세요.
+#   H200 은 CUDA 12.x 빌드가 필요합니다 (cu118 휠은 sm_90 미지원).
+#
+#   pip install torch==2.5.1 torchaudio==2.5.1 \
+#       --index-url https://download.pytorch.org/whl/cu124
+#
+#   확인:
+#   python -c "import torch; print(torch.__version__, torch.cuda.get_device_name(0), \
+#              torch.cuda.get_device_capability(0))"   # → (9, 0)
+#
+#   NVIDIA NGC 컨테이너(nvcr.io/nvidia/pytorch:*)를 쓰는 경우에는
+#   torch 를 pip 로 재설치하지 마세요. 컨테이너 내장 빌드가 깨집니다.
+#   그 환경에서는 이 파일에서 아래 명령으로 코어만 설치하세요:
+#     pip install "pandas==2.2.2" "ipywidgets==8.1.5" "jupyterlab==4.2.5"
+# ============================================================
