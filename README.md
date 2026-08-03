@@ -4,7 +4,7 @@
 > 다운로드 → 검증 → 복구 → 압축 해제 → 메타데이터 생성 → 화자 단위 탐색까지
 > **한 번에 처리하는 종합 툴킷**입니다.
 
-대용량(1.7TB) 한국어 TTS 데이터셋을 처음 받아 보는 사람도, 중간에 다운로드가 끊겨 골치 아픈 사람도, 시행착오 없이 학습용 메타데이터까지 안전하게 만들 수 있도록 만들어졌습니다.
+대용량(zip 약 217GB, 압축 해제 후 약 320GB) 한국어 TTS 데이터셋을 처음 받아 보는 사람도, 중간에 다운로드가 끊겨 골치 아픈 사람도, 시행착오 없이 학습용 메타데이터까지 안전하게 만들 수 있도록 만들어졌습니다.
 
 ---
 
@@ -21,8 +21,11 @@
 | **감정 강도** | 약(1) / 중(2) / 강(3) |
 | **음성 포맷** | WAV / 44.1kHz / Mono / Peak ≤ -1dB / Noise Floor ≤ -60dB |
 | **라벨 포맷** | JSON (대본·발화·스타일 태그·검수 투표 포함) |
-| **압축 상태 용량** | 약 1.5TB (zip 1,412개) |
-| **압축 해제 후 용량** | 약 1.7TB+ (wav 56만 + JSON 12만) |
+| **압축 상태 용량** | 약 **217GB** (zip 1,412개 — 원천 TS 193GB + VS 24GB, 라벨 TL/VL 약 0.1GB) |
+| **압축 해제 후 용량** | 약 **320GB** (wav 56만 + JSON 12만) |
+
+> 용량은 `verify/filelist_71349.txt`(AI Hub가 제공하는 파일 목록)의 파일 크기를 합산한 값입니다.
+> 압축 해제 후 용량은 44.1kHz/16bit/mono × 1,012시간 기준 추정치입니다.
 
 자세한 데이터셋 사양은 [`docs/`](docs/) 폴더의 공식 PDF를 참고하세요.
 
@@ -47,45 +50,62 @@ AI Hub의 대용량 음성 데이터셋은 다음과 같은 함정이 있습니�
 ### 사전 준비
 
 1. AI Hub 가입 후 datasetkey=71349 다운로드 권한 신청·승인
-2. [aihubshell 설치](https://www.aihub.or.kr) (공식 사이트 안내 참조)
-3. 충분한 디스크 (최소 3.5TB 권장 — zip + 압축해제 + 여유)
-4. Linux/macOS (bash 4.0+, Python 3.8+, `unzip`)
+2. AI Hub 마이페이지에서 **API Key 발급** (스크립트는 ID/PW가 아니라 API Key를 사용합니다)
+3. [aihubshell 설치](https://www.aihub.or.kr) (공식 사이트 안내 참조)
+4. 충분한 디스크 (**최소 600GB 권장** — zip 217GB + 압축해제 320GB + 여유)
+5. Linux/macOS (bash 4.0+, Python 3.8+, `unzip`)
 
 ### 5분 요약 워크플로우
 
 ```bash
-# 0) 레포 클론
-git clone https://github.com/renslightsaber/aihub-no-pain-71349.git
-cd aihub-no-pain-71349
+# 0) 레포 클론 + 공통 변수
+git clone https://github.com/renslightsaber/aihub-no-pain-71349.git ~/aihub-no-pain-71349
+export REPO=~/aihub-no-pain-71349
+export AIHUB_APIKEY='<your_api_key>'
 
 # 1) AI Hub에서 다운로드
 mkdir -p ~/aihub_71349 && cd ~/aihub_71349
-aihubshell -mode d -datasetkey 71349 -aihubid <your_id> -aihubpw <your_pw>
+cp "$REPO/verify/filelist_71349.txt" .        # 스크립트 기본값이 ./filelist_71349.txt
+aihubshell -mode d -datasetkey 71349 -aihubapikey "$AIHUB_APIKEY"
+
+# 1-1) ROOT(데이터셋 최상위 폴더)를 실제 이름으로 잡기
+export ROOT="$(find . -maxdepth 1 -type d -name '133.*' | head -1)"
 
 # 2) 다운로드 검증
-bash ~/aihub-no-pain-71349/verify/check_aihub.sh
+bash "$REPO/verify/check_aihub.sh"
 
-# 3) (필요 시) 누락 파일 자동 복구
-bash ~/aihub-no-pain-71349/verify/repair_aihub.sh
+# 3) (필요 시) 누락·손상 파일 자동 복구
+DRY_RUN=1 bash "$REPO/verify/repair_aihub.sh"   # 먼저 미리보기
+bash "$REPO/verify/repair_aihub.sh"
 
 # 4) zip 무결성 검증 (선택, 시간 소요)
-bash ~/aihub-no-pain-71349/verify/verify_zips.sh
+PARALLEL=8 bash "$REPO/verify/verify_zips.sh"
 
 # 5) zip 정리 → 압축 해제
-bash ~/aihub-no-pain-71349/preprocess/move_zips_to_zips_dir.sh
-bash ~/aihub-no-pain-71349/preprocess/extract_zips.sh
+bash "$REPO/preprocess/move_zips_to_zips_dir.sh"
+PARALLEL=8 bash "$REPO/preprocess/extract_zips.sh"
 
 # 6) 메타데이터 생성
-python3 ~/aihub-no-pain-71349/preprocess/build_metadata.py \
+python3 "$REPO/preprocess/build_metadata.py" \
   --data-dir ./data \
-  --base-dir "$PWD/.." \
+  --base-dir "$PWD" \
   --output-dir ./meta
 
 # 7) 노트북으로 탐색
-jupyter notebook ~/aihub-no-pain-71349/notebooks/explore_dataset.ipynb
+jupyter notebook "$REPO/notebooks/explore_dataset.ipynb"
 ```
 
-자세한 단계별 설명·옵션·기대 출력·트러블슈팅은 → **[USAGE.md](USAGE.md)**
+> ⚠️ `verify/`·`preprocess/`의 셸 스크립트는 다운로드 루트를 **`ROOT`** 환경변수로 받습니다
+> (기본값 `./133.감성_및_발화_스타일_동시_고려_음성합성_데이터`). aihubshell이 만드는 실제 폴더명은
+> 공백이 들어간 `133.감성 및 발화 스타일 동시 고려 음성합성 데이터`이므로, 위 `1-1`처럼 `ROOT`를
+> 실제 폴더명으로 잡아 주세요.
+
+| 문서 | 내용 |
+|---|---|
+| **[download_guide.md](download_guide.md)** | 📥 **다운로드 전용 가이드** — aihubshell 설치, API Key, 로케일, 부분 다운로드, 중단·재개, 검증→복구 루프 |
+| **[USAGE.md](USAGE.md)** | 압축 해제 → 메타데이터 생성 → 탐색까지 단계별 설명·옵션·기대 출력·트러블슈팅 |
+
+처음 받으시는 분은 **[download_guide.md](download_guide.md)** 부터 보세요.
 
 ---
 
@@ -94,15 +114,17 @@ jupyter notebook ~/aihub-no-pain-71349/notebooks/explore_dataset.ipynb
 ```
 aihub-no-pain-71349/
 ├── README.md                    # 이 파일
-├── USAGE.md                     # 단계별 상세 가이드
+├── download_guide.md            # 📥 다운로드 전용 상세 가이드
+├── USAGE.md                     # 압축 해제 이후 단계별 상세 가이드
+├── requirements_h200.txt        # Python 3.10 기준 의존성
 ├── LICENSE                      # MIT
 │
 ├── docs/                        # 공식 데이터셋 문서 (AI Hub 제공)
 │   ├── 감성및발화스타일동시고려음성합성데이터_구축활용_가이드라인.pdf
-│   └── 2-012-133_데이터설명서_감성_및_발화스타일_음성합성_데이터.pdf
+│   └── 2-012-133 데이터설명서_감성 및 발화스타일 음성합성 데이터.pdf
 │
 ├── verify/                      # 📥 1단계: 다운로드 검증 + 복구
-│   ├── filelist_71349.txt       # AI Hub 공식 파일 리스트 (기준값)
+│   ├── filelist_71349.txt       # AI Hub 공식 파일 리스트 (기준값 + filekey)
 │   ├── check_aihub.sh           # 빠른 진단 — 누락 파일 식별
 │   ├── verify_zips.sh           # zip 무결성 검증 (병렬 CRC)
 │   └── repair_aihub.sh          # 자동 복구 (5가지 케이스 처리)
