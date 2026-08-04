@@ -20,6 +20,7 @@
 - [3. 압축 해제 (`preprocess/`)](#3-압축-해제)
   - [3-1. zip 정리 — `move_zips_to_zips_dir.sh`](#3-1-zip-정리--move_zips_to_zips_dirsh)
   - [3-2. 압축 해제 — `extract_zips.sh`](#3-2-압축-해제--extract_zipssh)
+  - [3-3. zip 삭제로 용량 회수하기 ⚠️](#3-3-zip-삭제로-용량-회수하기)
 - [4. 메타데이터 생성 (`build_metadata.py`)](#4-메타데이터-생성)
 - [5. 데이터 탐색 (`explore_dataset.ipynb`)](#5-데이터-탐색)
 - [6. CSV 컬럼 레퍼런스](#6-csv-컬럼-레퍼런스)
@@ -38,7 +39,7 @@
 | **Python** | 3.8 이상 |
 | **필수 명령어** | `unzip`, `find`, `xargs`, `awk`, `sed` |
 | **Python 패키지** | `pandas`, `jupyter`, `ipywidgets` |
-| **디스크** | 최소 600GB 여유 (zip 약 217GB + 해제 약 320GB + 작업 여유) |
+| **디스크** | 최소 600GB 여유 (zip 220GB + 해제 293GB + 작업 여유) |
 | **메모리** | 8GB 이상 (메타데이터 생성 시 4GB 정도 사용) |
 
 ### 0-2. 디스크 공간 미리 확인
@@ -47,9 +48,20 @@
 # 사용 가능 공간 (GB)
 df -BG /path/to/storage
 
-# inode 여유 (작은 파일 56만 개 생성 예정)
+# inode 여유 (작은 파일 63만 개 생성 예정)
 df -i /path/to/storage
 ```
+
+**실측 기준 용량 곡선** (2026-08 전량 처리 완료 기준):
+
+| 시점 | zip | 해제본 | 합계 |
+|---|---:|---:|---:|
+| 다운로드 완료 | 220 GB | — | **220 GB** |
+| 압축 해제 완료 | 220 GB | 293 GB | **513 GB** ← 최대 |
+| zip 삭제 후 | — | 293 GB | **293 GB** |
+| + 메타데이터 (`meta/` 1.3GB) | — | 293 GB + 1.3 GB | **294 GB** |
+
+→ **순간 최대 513GB**가 필요합니다. 압축 해제가 끝나면 [3-3](#3-3-zip-삭제로-용량-회수하기)에서 220GB를 회수하세요.
 
 inode 사용률이 90%를 넘으면 압축 해제 중 `No space left on device` 에러가 날 수 있어요. 자세한 설명은 [FAQ #1](#faq-1-inode란-무엇인가요)을 참고하세요.
 
@@ -441,6 +453,102 @@ data/
     └── 02.라벨링데이터/  (VL_xxx/)
 ```
 
+### 압축 해제 완료 시 기대값 (실측)
+
+```bash
+find ./data -name "*.wav"  | wc -l     # → 622,905
+find ./data -name "*.json" | wc -l     # →  13,140
+du -sh ./data                          # → 293G
+```
+
+| 구분 | wav | JSON |
+|---|---:|---:|
+| Training | 559,887 | 11,875 |
+| Validation | 63,018 | 1,265 |
+| **합계** | **622,905** | **13,140** |
+
+숫자가 크게 모자라면 압축 해제가 덜 끝난 것입니다. `extract_zips.sh`는 `SKIP_EXISTING=1`이라
+**그냥 다시 돌리면 이어서 진행**됩니다.
+
+---
+
+### 3-3. zip 삭제로 용량 회수하기
+
+압축 해제가 끝나면 `zips/`의 **220GB는 더 이상 필요 없습니다.** 지우면 점유가 513GB → 293GB로 떨어집니다.
+
+> 🚨 **되돌릴 수 없는 작업입니다.** 다시 받으려면 AI Hub에서 220GB를 처음부터 내려받아야 하고,
+> 회선에 따라 수 시간~하루가 걸립니다. **반드시 아래 검증을 먼저 통과시키세요.**
+
+#### ① 전수 검증 (필수)
+
+`verify_extraction.py`는 zip 1,412개의 내부 목록을 하나씩 읽어, 그 파일들이 `data/`에
+**실제로 존재하는지 전부 대조**합니다. 압축을 다시 풀지 않으므로 빠릅니다.
+
+```bash
+cd /data/aihub_71349
+
+python3 "$REPO/preprocess/verify_extraction.py" \
+  --zips-dir ./zips \
+  --data-dir ./data
+```
+
+**통과 출력:**
+
+```
+  검사한 zip       : 1,412
+  zip 내부 총 파일 : 636,045
+  문제 있는 zip    : 0
+------------------------------------------------------------
+
+✅ 모든 zip이 빠짐없이 압축 해제되었습니다.
+   zip을 삭제해 용량을 회수해도 안전합니다.
+```
+
+**실패 출력이면 절대 지우지 마세요.** 스크립트가 조치 방법을 함께 알려 줍니다.
+
+| 상태 | 의미 | 조치 |
+|---|---|---|
+| `INCOMPLETE` | 폴더는 있는데 파일이 덜 풀림 | `extract_zips.sh` 재실행 (이어서 진행) |
+| `DEST_MISSING` | 대상 폴더 자체가 없음 | `extract_zips.sh` 재실행 |
+| `ZIP_UNREADABLE` | zip이 깨짐 | `verify_zips.sh` → `repair_aihub.sh` |
+
+| 옵션 | 기본값 | 설명 |
+|---|---|---|
+| `--zips-dir` | `./zips` | zip 보관 폴더 |
+| `--data-dir` | `./data` | 압축 해제된 폴더 |
+| `--parallel` | `16` | 동시 검사 수 |
+| `--sample N` | `0`(전수) | 접두어(TS/VS/TL/VL)별 N개만 빠르게 확인 |
+
+> 💡 압축 해제 **도중** 중간 점검만 하고 싶다면 `--sample 5`가 편합니다.
+> 다만 **삭제 직전에는 반드시 `--sample` 없이 전수 검증**하세요.
+
+#### ② 삭제 전 최종 확인
+
+지우기 전에 한 번 더 눈으로 확인하는 걸 권합니다:
+
+```bash
+# 지울 대상과 확보될 용량
+du -sh ./zips                                  # → 220G
+find ./zips -name "*.zip" | wc -l              # → 1412
+
+# 남을 데이터
+du -sh ./data                                  # → 293G
+find ./data -name "*.wav" | wc -l              # → 622905
+```
+
+#### ③ 삭제
+
+```bash
+rm -rf ./zips
+df -h .          # 220GB 확보 확인
+```
+
+> 📌 **메타데이터는 zip 없이도 언제든 다시 만들 수 있습니다.** `build_metadata.py`는 `data/`만
+> 읽으므로, zip을 지운 뒤에도 [4장](#4-메타데이터-생성)을 몇 번이든 재실행할 수 있습니다.
+
+> 📌 **`filelist_71349.txt`는 지우지 마세요.** 나중에 검증·부분 재다운로드를 할 때 기준값으로 필요합니다.
+> 용량은 93KB에 불과합니다.
+
 ---
 
 ## 4. 메타데이터 생성
@@ -465,8 +573,21 @@ python3 "$REPO/preprocess/build_metadata.py" \
 | `--data-dir` | `./data` | 압축 해제된 데이터 폴더 |
 | `--base-dir` | `data-dir.parent.parent` | `audio_path`의 기준 절대 경로 |
 | `--output-dir` | `./meta` | 출력 폴더 |
-| `--label-pattern` | `**/T[LV]_*/*.json` | JSON 검색 패턴 |
+| `--label-pattern` | `**/[TV]L_*/*.json` | JSON 검색 패턴 (`TL_`+`VL_` 모두 매칭) |
 | `--use-index` | `False` | wav 인덱스 미리 생성 (NFS stat 비용 절약) |
+
+> 💾 **NFS/네트워크 스토리지라면 `--use-index`를 켜세요.** wav 하나하나 `stat`을 날리는 대신
+> 인덱스를 한 번에 만들어 쓰기 때문에 체감 속도 차이가 큽니다.
+
+> ⚠️ **v3 이하로 만든 `metadata.csv`가 있다면 다시 만드세요.**
+> v3의 기본 패턴 `**/T[LV]_*/*.json`은 `TL_`(Training)만 매칭하고 **`VL_`(Validation)을 통째로
+> 놓쳤습니다.** 그 결과 CSV에 Validation 63,018개 wav가 들어가지 않았습니다.
+> 자가 진단은 간단합니다 — `stats_overall.txt`의 `split 분포`에 **`valid`가 없으면 구버전 산출물**입니다.
+>
+> ```bash
+> grep -A3 "split 분포" ./meta/stats_overall.txt
+> # train 만 있으면 → 재생성 필요
+> ```
 
 ### `base_dir`이 중요한 이유
 
@@ -501,15 +622,19 @@ meta/
 
 ### 4-3. 콘솔 출력 예시
 
+전량 처리 시의 **실제 출력**입니다. 이 숫자와 맞으면 정상입니다.
+
 ```
 data_dir   : /data/aihub_71349/data
 base_dir   : /data/aihub_71349
 output_dir : /data/aihub_71349/meta
 
+wav 파일 인덱스 생성 중...
+  → 622,905개 wav 인덱싱 완료
 JSON 라벨 파일 검색 중...
-  → 12,150개 JSON 발견
-  진행: 12150/12150
-  파싱 완료: 575,432개 row
+  → 13,140개 JSON 발견
+  진행: 13140/13140
+  파싱 완료: 623,642개 row
 
 [1/4] metadata.csv      : ./meta/metadata.csv
 [2/4] stats_overall     : ./meta/stats_overall.txt
@@ -518,14 +643,28 @@ JSON 라벨 파일 검색 중...
 [4/4] 화자별 CSV        : ./meta/metadatas_per_speaker/ (89개)
 
 ==================================================
-총 row 수    : 575,432
+총 row 수    : 623,642
 고유 화자    : 89명
-split 분포   : {'train': 560624, 'valid': 14808}
-성별 분포    : {'FEMALE': 290000, 'MALE': 285432}
+split 분포   : {'train': 560624, 'valid': 63018}
+성별 분포    : {'MALE': 314751, 'FEMALE': 308891}
 audio 누락   : 0건 (0.00%)
 ```
 
+**핵심 체크포인트 3가지:**
+
+| 확인 항목 | 정상값 | 어긋나면 |
+|---|---|---|
+| JSON 발견 개수 | **13,140개** | 11,875개면 `VL_`을 못 찾은 것 → [FAQ 3-1](#faq-3-1-csv에-valid-split이-아예-없어요-validation-누락) |
+| `split` 분포 | `train` **+** `valid` 둘 다 | `valid`가 없으면 위와 동일 |
+| `audio 누락` | **0건** | 압축 해제 미완료 → [FAQ 3](#faq-3-audio-파일-누락-nnnnnn건-이라고-나와요) |
+
 > ⚠️ `audio 누락`이 많이 나오면 압축 해제가 미완료된 경우가 대부분입니다. `extract_zips.sh`를 다시 돌려서 완료 후 재실행하세요.
+
+> ⏱️ **소요 시간**: NFS + `--use-index` 기준 약 25분 (wav 62만 개 인덱싱 10분 + JSON 13,140개 파싱 15분).
+>
+> 💾 **산출물 용량**: `meta/` 전체 **1.3GB** — `metadata.csv` 623MB + 화자별 CSV 89개 623MB + 통계 txt.
+> 화자별 CSV는 `metadata.csv`를 화자 단위로 나눈 것이라 사실상 같은 데이터를 두 벌 갖게 됩니다.
+> 용량이 아깝다면 `metadatas_per_speaker/`는 지워도 되고, 필요할 때 다시 만들면 됩니다.
 
 ---
 
@@ -687,20 +826,54 @@ find ./data -name "*.wav" | wc -l
 대부분 압축 해제가 완료되지 않은 경우입니다. 다음 순서로 확인:
 
 ```bash
-# 1) 전체 wav 개수 (50만+여야 정상)
+# 1) 전체 wav 개수 (622,905개여야 정상)
 find ./data -name "*.wav" | wc -l
 
-# 2) Validation 폴더도 풀렸는지
+# 2) Validation 폴더도 풀렸는지 (63,018개여야 정상)
 find ./data -path "*/Validation/*" -name "*.wav" | wc -l
 
 # 3) 풀리지 않은 zip이 있다면 재실행 (이어서)
 bash "$REPO/preprocess/extract_zips.sh"
 ```
 
+**가장 확실한 진단은 전수 검증입니다.** 어떤 zip이 덜 풀렸는지 이름까지 찍어 줍니다:
+
+```bash
+python3 "$REPO/preprocess/verify_extraction.py"
+```
+
 압축 해제가 완료됐는데도 누락이 나오면 `--use-index` 옵션을 추가해보세요:
 
 ```bash
 python3 build_metadata.py --data-dir ./data --output-dir ./meta --use-index
+```
+
+---
+
+### FAQ 3-1. CSV에 `valid` split이 아예 없어요 (Validation 누락)
+
+`stats_overall.txt`의 `split 분포`에 `train`만 있고 `valid`가 없다면,
+**`build_metadata.py` v3 이하로 만든 산출물**입니다.
+
+원인은 `--label-pattern` 기본값의 오타 한 글자였습니다:
+
+```
+v3 (버그): **/T[LV]_*/*.json   →  TL_ , TV_ 매칭  →  VL_ 을 못 찾음 ❌
+v4 (수정): **/[TV]L_*/*.json   →  TL_ , VL_ 매칭  →  정상 ✅
+```
+
+`VL_`(Validation Label) 폴더가 전혀 매칭되지 않아 **Validation 63,018개 wav가 통째로
+CSV에서 빠졌습니다.** 에러 없이 조용히 누락되기 때문에 눈치채기 어렵습니다.
+
+**해결:** 최신 `build_metadata.py`로 그대로 재실행하면 됩니다. 원본 데이터는 멀쩡하므로
+zip을 이미 지웠어도 문제없습니다.
+
+```bash
+python3 "$REPO/preprocess/build_metadata.py" \
+  --data-dir ./data --base-dir "$PWD" --output-dir ./meta --use-index
+
+# 확인
+grep -A3 "split 분포" ./meta/stats_overall.txt   # train, valid 둘 다 나와야 정상
 ```
 
 ### FAQ 4. `unzip: warning: stripped absolute path spec` 가 무수히 출력돼요
