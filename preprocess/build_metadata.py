@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
 """
-build_metadata.py (v3)
+build_metadata.py (v4)
 ============================================================
+v4 변경점:
+  - ★ --label-pattern 기본값 수정: "**/T[LV]_*/*.json" → "**/[TV]L_*/*.json"
+    구버전 패턴은 TL_(Training) 만 매칭되고 VL_(Validation) 이 전혀 잡히지 않아
+    Validation split 전량(라벨 1,265개 / wav 63,018개)이 CSV에서 누락됐습니다.
+    증상: stats_overall.txt 의 "split 분포" 에 train 만 나오고 valid 가 없음.
+    구버전으로 만든 metadata.csv 가 있다면 재생성하세요.
+
 v3 변경점:
   - audio_path + base_dir 컬럼 분리 (서버 이전 시 base_dir만 갈아끼우면 됨)
   - 출력물 4종:
@@ -353,7 +360,11 @@ def main():
                          "미지정 시 data-dir의 부모의 부모로 자동 설정")
     ap.add_argument("--output-dir", default="./meta",
                     help="모든 출력물의 저장 디렉토리 (기본: ./meta)")
-    ap.add_argument("--label-pattern", default="**/T[LV]_*/*.json")
+    # ★ 라벨 폴더는 Training=TL_*, Validation=VL_* 입니다.
+    #   구버전 기본값 "**/T[LV]_*/*.json" 은 TL_/TV_ 만 매칭해서 VL_(Validation)을
+    #   통째로 놓쳤습니다. 반드시 [TV]L_ 형태여야 두 split 모두 잡힙니다.
+    ap.add_argument("--label-pattern", default="**/[TV]L_*/*.json",
+                    help="JSON 라벨 검색 패턴 (기본: **/[TV]L_*/*.json — TL_/VL_ 모두 매칭)")
     ap.add_argument("--use-index", action="store_true",
                     help="wav 파일 인덱스 미리 생성 (NFS stat 비용 절약)")
     args = ap.parse_args()
