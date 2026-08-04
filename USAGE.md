@@ -23,6 +23,8 @@
   - [3-3. zip 삭제로 용량 회수하기 ⚠️](#3-3-zip-삭제로-용량-회수하기)
 - [4. 메타데이터 생성 (`build_metadata.py`)](#4-메타데이터-생성)
 - [5. 데이터 탐색 (`explore_dataset.ipynb`)](#5-데이터-탐색)
+  - [5-1. 실행 환경 준비](#5-1-실행-환경-준비)
+  - [5-2. 노트북 실행](#5-2-노트북-실행)
 - [6. CSV 컬럼 레퍼런스](#6-csv-컬럼-레퍼런스)
 - [7. 트러블슈팅 FAQ](#7-트러블슈팅-faq)
 
@@ -38,7 +40,7 @@
 | **bash** | 4.0 이상 |
 | **Python** | 3.8 이상 |
 | **필수 명령어** | `unzip`, `find`, `xargs`, `awk`, `sed` |
-| **Python 패키지** | `pandas`, `jupyter`, `ipywidgets` |
+| **Python 패키지** | `pandas`, `IPython`, `ipywidgets`(**8.x**) — 오디오 라이브러리·GPU 불필요 |
 | **디스크** | 최소 600GB 여유 (zip 220GB + 해제 293GB + 작업 여유) |
 | **메모리** | 8GB 이상 (메타데이터 생성 시 4GB 정도 사용) |
 
@@ -672,23 +674,76 @@ audio 누락   : 0건 (0.00%)
 
 `explore_dataset.ipynb`는 **화자 ID를 선택하면 그 화자의 발화 샘플과 메타데이터를 함께 보여주는** 인터랙티브 노트북입니다.
 
-### 5-1. 노트북 실행
+### 5-1. 실행 환경 준비
+
+이 노트북이 실제로 요구하는 서드파티는 **`pandas` · `IPython` · `ipywidgets` 세 개뿐**입니다.
+`IPython.display.Audio`가 wav 경로를 그대로 임베드하므로 **soundfile·librosa 같은 오디오
+라이브러리도, GPU도 필요 없습니다.**
+
+**① 기존 env 재사용 (권장)** — pandas + jupyter가 있는 env라면 대개 `ipywidgets`만 없습니다.
 
 ```bash
-# 필수 패키지
-pip install pandas jupyter ipywidgets
-
-# 노트북 실행
-jupyter notebook "$REPO/notebooks/explore_dataset.ipynb"
+conda activate <기존_env>
+pip install "ipywidgets==8.1.5" "jupyterlab_widgets==3.0.13" "widgetsnbextension==4.0.13"
 ```
 
-또는 VSCode에서 `.ipynb` 파일을 직접 열어도 됩니다.
+순수 추가라 기존 패키지를 건드리지 않습니다. 걱정되면 먼저 확인하세요:
 
-### 5-2. 노트북 셀 구성
+```bash
+pip install --dry-run "ipywidgets==8.1.5" "jupyterlab_widgets==3.0.13" "widgetsnbextension==4.0.13"
+# "Would install ..." 줄만 나오고 "Would uninstall"이 없으면 안전
+```
+
+**② 전용 env 신규 생성**
+
+```bash
+conda create -n aihub71349 python=3.10 -y
+conda activate aihub71349
+pip install -U pip wheel                       # ⚠️ setuptools는 -U 하지 마세요
+pip install -r "$REPO/requirements_h200.txt"
+python -m ipykernel install --user --name aihub71349 --display-name "Python (aihub71349)"
+```
+
+**설치 확인**
+
+```bash
+python -c "
+import pandas, IPython, ipywidgets, shutil
+print('pandas    ', pandas.__version__)
+print('IPython   ', IPython.__version__)
+print('ipywidgets', ipywidgets.__version__, '(8.x여야 함)')
+assert ipywidgets.__version__.startswith('8.')
+assert shutil.which('unzip')
+print('✅ 준비 완료')"
+```
+
+> ⚠️ **`ipywidgets`가 7.x면 위젯이 아예 안 보입니다.** JupyterLab 4 / Notebook 7은 7.x의
+> nbextension 방식을 지원하지 않습니다. "위젯이 안 뜬다"는 증상의 1순위 원인입니다.
+
+### 5-2. 노트북 실행
+
+```bash
+jupyter lab "$REPO/notebooks/explore_dataset.ipynb"
+```
+
+VSCode에서 `.ipynb`를 직접 열어도 됩니다. 커널은 위에서 준비한 env를 선택하세요.
+
+**⚙️ 첫 셀의 `DATASET_ROOT`만 본인 경로로 맞추면 끝입니다:**
+
+```python
+DATASET_ROOT = Path("/data/aihub_71349")   # data/ 와 meta/ 를 담고 있는 폴더
+```
+
+경로가 틀리면 첫 셀에서 이유와 함께 멈추고, `metadata.csv`가 없으면 생성 명령까지 안내합니다.
+
+> 💡 **커밋 전 출력 비우기** — 오디오 위젯은 wav를 base64로 노트북에 내장합니다. 몇 번 재생하고
+> 저장하면 파일이 수 MB~수십 MB로 불어납니다. `Kernel → Restart & Clear Output`을 눌러 주세요.
+
+### 5-3. 노트북 셀 구성
 
 | 셀 | 내용 |
 |---|---|
-| 1 | 환경 설정, metadata.csv 로드 |
+| **1** | **설정 (`DATASET_ROOT`) + metadata.csv 로드** — 여기만 고치면 됩니다 |
 | 2 | 절대 경로 헬퍼 (`base_dir + audio_path`) |
 | 3 | 화자 정보 카드 출력 함수 |
 | 4 | 샘플 청취 함수 (필터·재생) |
@@ -697,18 +752,19 @@ jupyter notebook "$REPO/notebooks/explore_dataset.ipynb"
 | 7 | 화자별 CSV 직접 로드 |
 | 8 | 학습용 데이터 필터링 체크리스트 |
 
-### 5-3. 인터랙티브 위젯 UI
+### 5-4. 인터랙티브 위젯 UI
 
 ```
 ┌────────────────────────────────────────────────────────────────┐
 │ 화자 ID: [9 ▼]  발화체: [(전체) ▼]  감정: [분노 ▼]  강도: [3 ▼] │
-│ 샘플 수: ━●━━━━━━━━━ 5    seed: [42]   텍스트: [엄마      ] │
+│ split: [(전체) ▼]   샘플 수: ━●━━━━━━━━━ 5    seed: [42]      │
+│ 텍스트: [엄마                                              ]   │
 │ [ℹ️ 화자 정보만]  [🔍 검색 + 재생]                              │
 ├────────────────────────────────────────────────────────────────┤
 │ 🎤 화자 9                                                      │
-│ 성별: FEMALE  나이: 20세  총 발화: 1,234건  총 30.5분          │
+│ 성별: FEMALE  나이: 20세  총 발화: 9,805건  총 761.0분         │
 │                                                                │
-│ #1  A-A2-A-009-0101  |  애니체/남아  |  분노(강도 3)  |  3.4초 │
+│ #1 A-A2-A-009-0101 | 애니체/남아 | 분노(강도 3) | 3.4초 | train│
 │ tr:  지금 싸움을 외면하라는 겁니까, 동료들의 죽음에서 ...      │
 │ ptr: 지금 싸움을 외면하라는 겁니까 / 동료들의 죽음에서 / ...   │
 │ 📁 133.../TS_애니체_001/A-A2-A-009-0101.wav                    │
@@ -718,7 +774,7 @@ jupyter notebook "$REPO/notebooks/explore_dataset.ipynb"
 └────────────────────────────────────────────────────────────────┘
 ```
 
-### 5-4. 프로그래밍 인터페이스로 사용하기
+### 5-5. 프로그래밍 인터페이스로 사용하기
 
 위젯 외에도 직접 함수를 호출할 수 있어요:
 

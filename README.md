@@ -105,8 +105,11 @@ python3 "$REPO/preprocess/build_metadata.py" \
   --output-dir ./meta \
   --use-index
 
-# 8) 노트북으로 탐색
-jupyter notebook "$REPO/notebooks/explore_dataset.ipynb"
+# 8) 청음 노트북으로 탐색
+#    ipywidgets 8.x 가 없으면 위젯이 안 보입니다 (기존 env 재사용 시 이것만 추가하면 됨)
+pip install "ipywidgets==8.1.5" "jupyterlab_widgets==3.0.13" "widgetsnbextension==4.0.13"
+jupyter lab "$REPO/notebooks/explore_dataset.ipynb"
+#    → 첫 셀의 DATASET_ROOT 를 위 $PWD 로 맞추면 끝
 ```
 
 > ⚠️ `verify/`·`preprocess/`의 셸 스크립트는 다운로드 루트를 **`ROOT`** 환경변수로 받습니다
@@ -223,11 +226,13 @@ aihub-no-pain-71349/
   - 화자별 CSV 분리 저장
   - `--use-index`로 NFS `stat` 비용 절감
 
-### `notebooks/` — 화자 중심 탐색
+### `notebooks/` — 화자 중심 청음 탐색
 - 화자 ID 드롭다운 선택 → 정보 카드 + 샘플 청취
-- 감정·스타일·강도·텍스트 검색 필터
+- **감정·스타일·강도·split·텍스트 검색 필터**
 - tr(철자 전사), ptr(발음 전사) 동시 표시
 - ipywidgets 인터랙티브 UI
+- **의존성 3개뿐** (`pandas`·`IPython`·`ipywidgets`) — 오디오 라이브러리도 GPU도 불필요
+- 설정은 첫 셀 `DATASET_ROOT` 한 줄. 경로가 틀리면 이유와 해결 명령을 알려주고 멈춥니다
 
 ---
 

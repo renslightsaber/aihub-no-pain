@@ -1,63 +1,122 @@
 # ============================================================
 # requirements_h200.txt
-# aihub-no-pain-71349 — 전처리 + 탐색 실행 환경
+# aihub-no-pain-71349 — 전처리 + 청음 탐색 실행 환경
 #
 # 기준 Python : 3.10.20
+# 검증 환경   : NIPA / KT Cloud AI Nexus H200 (Ubuntu 22.04, conda env "porte")
 # 검증 대상   : preprocess/build_metadata.py
-#               notebooks/explore_dataset.ipynb
+#               preprocess/verify_extraction.py
+#               notebooks/explore_dataset.ipynb   ← 전 셀 실행 성공 확인
 #
-# 설치:
-#   python3.10 -m venv .venv && source .venv/bin/activate
-#   pip install -U pip setuptools wheel
-#   pip install -r requirements_h200.txt
+# ------------------------------------------------------------
+# ★ 이 레포가 실제로 요구하는 서드파티는 단 3개입니다.
+#   전체 코드 import 를 전수 조사한 결과:
 #
-# 주의: 이 파일은 "데이터 준비 파이프라인"에 필요한 최소 의존성입니다.
-#       GPU(H200) 학습 프레임워크는 아래 [선택] 블록 참고.
+#     pandas      ← build_metadata.py, explore_dataset.ipynb
+#     IPython     ← explore_dataset.ipynb  (Audio/display/HTML/clear_output)
+#     ipywidgets  ← explore_dataset.ipynb  (Dropdown/Text/IntSlider/Button/Output)
+#
+#   verify_extraction.py 는 표준 라이브러리만 씁니다.
+#   GPU / torch / 오디오 라이브러리는 **전혀 필요 없습니다.**
+#   (IPython.display.Audio 는 wav 경로를 그대로 임베드하므로
+#    soundfile·librosa 없이 44.1kHz wav 가 재생됩니다.)
+#
+#   셸 스크립트용 외부 바이너리: unzip, find, xargs, awk, sed, tr
+#     확인: for c in unzip find xargs awk sed tr; do command -v $c || echo "missing: $c"; done
 # ============================================================
 
-# ---- 코어 (build_metadata.py) --------------------------------
-# build_metadata.py 가 직접 쓰는 서드파티 패키지는 pandas 하나뿐입니다.
+
+# ============================================================
+# 설치 방법 A — 기존 env 재사용 ★권장★
+# ============================================================
+# 이미 pandas + jupyter 가 있는 env(예: tpex_porte 의 "porte")를 쓰신다면
+# 새 env 를 만들 필요가 없습니다. 대개 ipywidgets 만 없습니다.
+#
+#   conda activate porte
+#   pip install "ipywidgets==8.1.5" "jupyterlab_widgets==3.0.13" "widgetsnbextension==4.0.13"
+#
+# 이 3개는 순수 추가라 기존 패키지를 건드리지 않습니다(설치 전 --dry-run 으로 확인 가능).
+# porte 의 librosa/numba/pyworld 조합은 그대로 유지됩니다.
+#
+# 아래 핀은 의도적으로 "범위"로 두어, 이 파일을 그대로
+#   pip install -r requirements_h200.txt
+# 해도 기존 env 의 pandas·IPython 버전을 끌어내리지 않습니다.
+#
+# ============================================================
+# 설치 방법 B — 이 레포 전용 env 신규 생성
+# ============================================================
+#   conda create -n aihub71349 python=3.10 -y
+#   conda activate aihub71349
+#   pip install -U pip wheel
+#   pip install -r requirements_h200.txt
+#   python -m ipykernel install --user --name aihub71349 \
+#          --display-name "Python (aihub71349)"
+#
+#   ⚠️ setuptools 를 -U 로 올리지 마세요.
+#      이 레포 자체는 상관없지만, 같은 env 를 tpex_porte(PORTE)와 공유할 경우
+#      setuptools 81+ 에서 pkg_resources 가 제거되어 pyworld 가 즉시 깨집니다.
+# ============================================================
+
+
+# ---- 코어 --------------------------------------------------
+# build_metadata.py 가 직접 쓰는 서드파티는 pandas 하나뿐입니다.
 # (argparse / json / pathlib / typing 은 표준 라이브러리)
-pandas==2.2.2
-# pandas 백엔드. numpy 2.x 는 다른 오디오/학습 패키지와 충돌이 잦아 1.26.x 고정.
-numpy==1.26.4
+# 검증 버전: 2.2.3
+pandas>=2.0,<3.0
 
-# [선택] 57만 row CSV 를 parquet 으로 바꿔 쓰거나 pandas 의 pyarrow 엔진을 쓸 때만 필요.
-# 레포 코드 자체는 요구하지 않습니다.
-# pyarrow==17.0.0
+# pandas 백엔드. numpy 2.x 는 오디오/학습 패키지(librosa+numba)와 ABI 충돌이 잦아 1.x 고정.
+# 검증 버전: 1.26.4
+numpy>=1.24,<2.0
 
-# ---- 노트북 탐색 (explore_dataset.ipynb) ----------------------
-# 사용 API: pandas, pathlib, IPython.display(Audio/display/HTML/clear_output),
-#           ipywidgets(Dropdown/HBox/VBox/Layout/Button/Text/Output/IntText/IntSlider)
-ipython==8.27.0
-ipykernel==6.29.5
 
-# ⚠️ ipywidgets 는 반드시 8.x 를 쓰세요.
+# ---- 노트북 탐색 (explore_dataset.ipynb) --------------------
+# 검증 버전: ipython 8.39.0 / ipykernel 6.29.5
+ipython>=8.18
+ipykernel>=6.25
+
+# ⚠️ ipywidgets 는 반드시 8.x 를 쓰세요. 여기만 정확히 고정합니다.
 #    JupyterLab 4 / Notebook 7 에서는 ipywidgets 7.x 위젯이 렌더링되지 않습니다
 #    (7.x 는 nbextension 방식, 8.x 는 prebuilt lab extension 방식).
+#    → 위젯이 "안 보이는" 증상의 원인 1순위입니다.
 ipywidgets==8.1.5
 jupyterlab_widgets==3.0.13
 widgetsnbextension==4.0.13
 
-jupyterlab==4.2.5
-notebook==7.2.2
+# 노트북 실행기. JupyterLab 만 있으면 되고 notebook(classic) 은 선택입니다.
+# 검증 버전: 4.2.5
+jupyterlab>=4.0,<5.0
 
-# IPython.display.Audio 는 wav 파일 경로를 그대로 임베드하므로
-# soundfile/librosa 없이도 44.1kHz wav 재생이 됩니다. (추가 의존성 불필요)
+# [선택] Notebook 7 UI 를 따로 쓰고 싶을 때만.
+# notebook>=7.0,<8.0
+
 
 # ============================================================
-# [선택] 오디오 분석을 직접 할 때만 주석 해제
+# [선택] 62만 row CSV 를 parquet 으로 바꿔 쓰거나 pandas 의 pyarrow 엔진을 쓸 때만 필요.
+#        레포 코드 자체는 요구하지 않습니다.
+# ============================================================
+# pyarrow>=15.0
+
+
+# ============================================================
+# [선택] 오디오를 직접 분석할 때만 주석 해제
 #   - build_metadata.py 는 duration 을 JSON 라벨에서 읽으므로 불필요합니다.
-#   - wav 를 직접 열어 검증/리샘플링하려면 아래를 사용하세요.
+#   - 노트북 청음도 불필요합니다 (IPython.display.Audio 가 처리).
+#   - wav 를 직접 열어 검증/리샘플링할 때만 쓰세요.
+#
+#   ★ 아래 조합은 tpex_porte(PORTE) 와 호환되도록 맞춘 버전입니다.
+#     scipy 는 1.14+ 를 쓰면 PORTE 쪽 제약(<1.14)과 충돌하니 주의하세요.
 # ============================================================
 # soundfile==0.12.1
 # librosa==0.10.2.post1
-# scipy==1.14.1
+# scipy==1.13.1
 # matplotlib==3.9.2
-# tqdm==4.66.5
+# tqdm==4.67.1
+
 
 # ============================================================
-# [선택] H200(Hopper, sm_90) 학습 스택
+# [참고] H200(Hopper, sm_90) 학습 스택 — 이 레포에서는 쓰지 않습니다
+#   이 레포는 CPU 만으로 완결됩니다. 학습은 별도 레포에서 진행하세요.
+#
 #   PyTorch 는 PyPI 기본 인덱스가 아닌 CUDA 휠을 쓰세요.
 #   H200 은 CUDA 12.x 빌드가 필요합니다 (cu118 휠은 sm_90 미지원).
 #
@@ -70,6 +129,21 @@ notebook==7.2.2
 #
 #   NVIDIA NGC 컨테이너(nvcr.io/nvidia/pytorch:*)를 쓰는 경우에는
 #   torch 를 pip 로 재설치하지 마세요. 컨테이너 내장 빌드가 깨집니다.
-#   그 환경에서는 이 파일에서 아래 명령으로 코어만 설치하세요:
-#     pip install "pandas==2.2.2" "ipywidgets==8.1.5" "jupyterlab==4.2.5"
+# ============================================================
+
+
+# ============================================================
+# 설치 검증 (모두 OK 나와야 함)
+# ============================================================
+# python - <<'EOF'
+# import pandas, IPython, ipywidgets, shutil, sys
+# print(f"python     {sys.version.split()[0]}")
+# print(f"pandas     {pandas.__version__}")
+# print(f"IPython    {IPython.__version__}")
+# print(f"ipywidgets {ipywidgets.__version__}   (must be 8.x)")
+# assert ipywidgets.__version__.startswith("8."), "ipywidgets 8.x 필요"
+# assert shutil.which("unzip"), "unzip 바이너리 필요"
+# print("unzip      OK")
+# print("\n✅ 이 레포를 실행할 준비가 되었습니다.")
+# EOF
 # ============================================================
